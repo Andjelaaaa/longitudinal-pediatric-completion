@@ -1,0 +1,3 @@
+tensorflow
+numpy
+# Add other dependencies as needed
