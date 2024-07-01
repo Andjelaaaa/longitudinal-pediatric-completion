@@ -2,10 +2,10 @@ import tensorflow as tf
 import wandb
 from wandb.keras import WandbCallback
 from tensorflow.keras.callbacks import TensorBoard
-from models.build_model import build_model_3d
-from utils.training import train_model
-from utils.diffusion import denoise
-from utils.losses import total_loss
+from model import build_model_3d, denoise
+from training import train_model
+from training import train_step
+from loader import load_and_preprocess_data
 
 def main():
     # Initialize wandb
