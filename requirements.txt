@@ -1,0 +1,6 @@
+# Cuda version 12.6
+pytorch
+numpy
+tensorboard
+wandb
+# Add other dependencies as needed
