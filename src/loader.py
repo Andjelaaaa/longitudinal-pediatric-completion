@@ -436,22 +436,26 @@ def create_df_CP(filename, path):
     return df, trios_df
 
 def preprocess_CP(df, trios_df):
-    # Skull-strip each N4 corrected scan with 2 times bet command
-    start_time = time.time()
-    # Only to be done on participants which have multiple time points
-    for index, row in df.iterrows():
-        if row['scan_id'] in trios_df['scan_id'].values:
-            print(f'Scan nbr: {index}')
-            skull_strip(row.n4_path, row.scan_id)
-    end_time = time.time()
+    # # Skull-strip each N4 corrected scan with 2 times bet command
+    # start_time = time.time()
+    # # Only to be done on participants which have multiple time points
+    # for index, row in df.iterrows():
+    #     if row['scan_id'] in trios_df['scan_id'].values:
+    #         print(f'Scan nbr: {index}')
+    #         skull_strip(row.n4_path, row.scan_id)
+    # end_time = time.time()
 
-    # Calculate the duration
-    duration = end_time - start_time
+    # # Calculate the duration
+    # duration = end_time - start_time
 
-    # Print the time taken
-    print(f"Time taken for skull stripping: {duration} seconds")
+    # # Print the time taken
+    # print(f"Time taken for skull stripping: {duration} seconds")
     
     # Rigid reg to middle time point
+    processed_pairs = set()
+    
+    # Dictionary to store previous paths for already registered pairs
+    saved_paths_for_pairs = {}
     # Iterate through each subject in the DataFrame
     for sub_id, group in trios_df.groupby('sub_id_bids'):
         # Since the data is grouped by subject, each group represents a subject with multiple trios
@@ -459,24 +463,52 @@ def preprocess_CP(df, trios_df):
         
         for trio in trios:
             # Extract the paths for the trio
-            # /home/andjela/joplin-intra-inter/work_dir/reg_n4_wdir/10006/PS14_053/wf/n4/PS14_053_corrected
             path_1 = trio.iloc[0]['path']
             path_2 = trio.iloc[1]['path']  # This is the reference
             path_3 = trio.iloc[2]['path']
 
-            # Create a directory to save the preprocessed images if it doesn't exist already, create the directory
-            if not os.path.exists(f'./data/CP/{sub_id}/{trio.iloc[1]["trio_id"]}'):
-                os.makedirs(f'./data/CP/{sub_id}/{trio.iloc[1]["trio_id"]}')
-
+            # Create a directory to save the preprocessed images if it doesn't exist
             save_path = f'./data/CP/{sub_id}/{trio.iloc[1]["trio_id"]}/'
+            if not os.path.exists(save_path):
+                os.makedirs(save_path)
+
+            # Create a tuple to represent the scan pair (scan_1 -> scan_2)
+            pair_1_to_2 = (trio.iloc[0]['scan_id'], trio.iloc[1]['scan_id'])
+            pair_3_to_2 = (trio.iloc[2]['scan_id'], trio.iloc[1]['scan_id'])
 
             # Save scan_2 in dedicated space (./data/CP/sub_id_bids/trio_id/) if not already there
             if not os.path.exists(f'{save_path}/{os.path.basename(path_2)}'):
                 shutil.copy(path_2, f'{save_path}/{trio.iloc[1]['scan_id']}.nii.gz')
-            
-            # Perform registration on scan_1 -> scan_2 and scan_3 -> scan_2
-            perform_registration(path_1, path_2, trio.iloc[0]['scan_id'], trio.iloc[1]['scan_id'], save_path)
-            perform_registration(path_3, path_2, trio.iloc[2]['scan_id'], trio.iloc[1]['scan_id'], save_path)
+
+            # If pair_1_to_2 has been processed, copy the previous scan_1 to the current trio directory
+            if pair_1_to_2 in saved_paths_for_pairs:
+                previous_scan_1_path = saved_paths_for_pairs[pair_1_to_2]
+                shutil.copy(previous_scan_1_path, f'{save_path}/{trio.iloc[0]["scan_id"]}.nii.gz')
+            else:
+                # If the pair has not been processed, perform registration and save the path
+                perform_registration(path_1, path_2, trio.iloc[0]['scan_id'], trio.iloc[1]['scan_id'], save_path)
+                # Copy scan_1 to the current trio's directory
+                shutil.copy(path_1, f'{save_path}/{trio.iloc[0]["scan_id"]}.nii.gz')
+                # Save the path where scan_1 is saved
+                saved_paths_for_pairs[pair_1_to_2] = f'{save_path}/{trio.iloc[0]["scan_id"]}.nii.gz'
+                # Add the pair to the processed set
+                processed_pairs.add(pair_1_to_2)
+
+            # Perform registration for scan_3 -> scan_2 if it hasn't been processed yet
+            if pair_3_to_2 not in processed_pairs:
+                perform_registration(path_3, path_2, trio.iloc[2]['scan_id'], trio.iloc[1]['scan_id'], save_path)
+                # Copy scan_3 to the current trio's directory
+                shutil.copy(path_3, f'{save_path}/{trio.iloc[2]["scan_id"]}.nii.gz')
+                # Add the pair to the processed set
+                processed_pairs.add(pair_3_to_2)
+            else:
+                # Copy the already registered scan_3 from previous trio to the current trio directory
+                previous_scan_3_path = saved_paths_for_pairs[pair_3_to_2]
+                shutil.copy(previous_scan_3_path, f'{save_path}/{trio.iloc[2]["scan_id"]}.nii.gz')
+
+            # # Perform registration on scan_1 -> scan_2 and scan_3 -> scan_2
+            # perform_registration(path_1, path_2, trio.iloc[0]['scan_id'], trio.iloc[1]['scan_id'], save_path)
+            # perform_registration(path_3, path_2, trio.iloc[2]['scan_id'], trio.iloc[1]['scan_id'], save_path)
             print('Done')
             # os.path.dirname(image_path)
 
