@@ -340,9 +340,8 @@ def perform_registration(mov_path, fix_path, scan_id_mov, scan_id_fix, save_path
 # Function to skull-strip an image
 def skull_strip(image_path, scan_id):
     # Placeholder for actual skull-stripping code
-    # e.g., using an image processing library like FSL or ANTs
-    print(f"Skull-stripped {os.path.basename(image_path)}")
-    if scan_id != 'PS14_001':
+    # e.g., using an image processing library FSL BET
+    if scan_id not in ['PS14_001', 'PS14_005']:
         os.system(f'/usr/local/fsl/bin/bet {image_path} ' \
           f'{os.path.dirname(image_path)}/{scan_id}_skull.nii.gz -f 0.5 -g 0')
     else:
@@ -350,6 +349,7 @@ def skull_strip(image_path, scan_id):
             f'{os.path.dirname(image_path)}/{scan_id}_skull_it_1.nii.gz -f 0.8 -g 0')
         os.system(f'/usr/local/fsl/bin/bet {os.path.dirname(image_path)}/{scan_id}_skull_it_1.nii.gz ' \
           f'{os.path.dirname(image_path)}/{scan_id}_skull.nii.gz -f 0.3 -g 0')
+    print(f"Skull-stripped {os.path.basename(image_path)}")
     
 def create_df_CP(filename, path):
     
@@ -481,24 +481,24 @@ def preprocess_CP(df, trios_df):
                 shutil.copy(path_2, f'{save_path}/{trio.iloc[1]['scan_id']}.nii.gz')
 
             # If pair_1_to_2 has been processed, copy the previous scan_1 to the current trio directory
-            if pair_1_to_2 in saved_paths_for_pairs:
-                previous_scan_1_path = saved_paths_for_pairs[pair_1_to_2]
-                shutil.copy(previous_scan_1_path, f'{save_path}/{trio.iloc[0]["scan_id"]}.nii.gz')
-            else:
+            if pair_1_to_2 not in saved_paths_for_pairs:
                 # If the pair has not been processed, perform registration and save the path
                 perform_registration(path_1, path_2, trio.iloc[0]['scan_id'], trio.iloc[1]['scan_id'], save_path)
-                # Copy scan_1 to the current trio's directory
-                shutil.copy(path_1, f'{save_path}/{trio.iloc[0]["scan_id"]}.nii.gz')
+                # # Copy scan_1 to the current trio's directory
+                # shutil.copy(path_1, f'{save_path}/{trio.iloc[0]["scan_id"]}.nii.gz')
                 # Save the path where scan_1 is saved
                 saved_paths_for_pairs[pair_1_to_2] = f'{save_path}/{trio.iloc[0]["scan_id"]}.nii.gz'
                 # Add the pair to the processed set
                 processed_pairs.add(pair_1_to_2)
+            else:
+                previous_scan_1_path = saved_paths_for_pairs[pair_1_to_2]
+                shutil.copy(previous_scan_1_path, f'{save_path}/{trio.iloc[0]["scan_id"]}.nii.gz')
 
             # Perform registration for scan_3 -> scan_2 if it hasn't been processed yet
             if pair_3_to_2 not in processed_pairs:
                 perform_registration(path_3, path_2, trio.iloc[2]['scan_id'], trio.iloc[1]['scan_id'], save_path)
-                # Copy scan_3 to the current trio's directory
-                shutil.copy(path_3, f'{save_path}/{trio.iloc[2]["scan_id"]}.nii.gz')
+                # Save the path where scan_3 is saved
+                saved_paths_for_pairs[pair_3_to_2] = f'{save_path}/{trio.iloc[2]["scan_id"]}.nii.gz'
                 # Add the pair to the processed set
                 processed_pairs.add(pair_3_to_2)
             else:
