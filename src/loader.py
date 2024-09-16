@@ -4,6 +4,13 @@ import pandas as pd
 import shutil
 import glob
 import time
+import nibabel as nib
+import seaborn as sns
+from statsmodels.graphics.functional import rainbowplot
+from scipy.interpolate import make_interp_spline
+import matplotlib
+matplotlib.use('TkAgg')
+import matplotlib.pyplot as plt
 from itertools import combinations
 # import nibabel as nib
 # from PIL import Image
@@ -423,7 +430,8 @@ def create_df_CP(filename, path):
                 sorted_trio_df.columns = group.columns  # Maintain the original column names
                 sorted_trio_df['trio_id'] = f'trio-{trio_number:03d}'  # Assign trio number
                 sorted_trio_df['path'] = sorted_trio_df.apply(
-                    lambda row: f'/home/andjela/joplin-intra-inter/work_dir/reg_n4_wdir/{row.participant_id}/{row.scan_id}/wf/n4/{row.scan_id}_skull.nii.gz', axis=1)
+                    # lambda row: f'/home/andjela/joplin-intra-inter/work_dir/reg_n4_wdir/{row.participant_id}/{row.scan_id}/wf/n4/{row.scan_id}_skull.nii.gz', axis=1)
+                    lambda row: f'/home/andjela/joplin-intra-inter/work_dir2/cbf2mni_wdir/{row.participant_id}/{row.scan_id}/wf/brainextraction/{row.scan_id}_dtype.nii.gz', axis=1)
                 new_rows.extend(sorted_trio_df.itertuples(index=False))
                 trio_number += 1  # Increment the trio number
 
@@ -513,7 +521,135 @@ def preprocess_CP(df, trios_df):
             # os.path.dirname(image_path)
 
 
+def calculate_avg_intensity(img_path):
+    # Load the NIfTI file
+    nifti_img = nib.load(img_path)
 
+    # Get the image data as a numpy array
+    nifti_data = nifti_img.get_fdata()
+
+    # Calculate the average intensity for values > 0
+    avg_intensity = np.mean(nifti_data[nifti_data > 0])
+
+    return avg_intensity
+
+
+def process_csv_and_calculate_averages(csv_file_path):
+    """
+    Processes the CSV file, calculates the average intensity for each NIfTI image,
+    and stores the result in a new column 'avg_intensity'. It avoids recalculating
+    the average intensity for duplicate scan IDs.
+    
+    Parameters:
+        csv_file_path (str): Path to the input CSV file.
+        output_csv_path (str): Path where the updated CSV will be saved.
+    """
+    # Load the CSV file
+    df = pd.read_csv(csv_file_path)
+
+    # Dictionary to store pre-calculated averages for each scan_id
+    average_intensity_cache = {}
+
+    # Iterate through each row and calculate/store the average intensity
+    for idx, row in df.iterrows():
+        scan_id = row['scan_id']
+
+        if scan_id not in average_intensity_cache:
+            # Calculate the average intensity if it hasn't been calculated already
+            try:
+                avg_intensity = calculate_avg_intensity(row['path'])
+            except Exception as e:
+                print(f"Error loading NIfTI file for scan_id {scan_id}: {e}")
+                avg_intensity = np.nan  # If there's an error, store NaN
+            average_intensity_cache[scan_id] = avg_intensity
+        else:
+            # Reuse the cached value for the same scan_id
+            avg_intensity = average_intensity_cache[scan_id]
+
+        # Add the average intensity value to the DataFrame
+        df.at[idx, 'avg_intensity'] = avg_intensity
+
+    # Save the updated DataFrame with the new column
+    df.to_csv(csv_file_path, index=False)
+
+def create_rainbow_plot(csv_file_path):
+    """
+    Creates a rainbow plot using statsmodels' rainbowplot function, 
+    plotting the curves of average intensity values over age.
+    
+    Parameters:
+        csv_file_path (str): Path to the input CSV file.
+    """
+    df = pd.read_csv(csv_file_path)
+    
+        # Get the unique participant ids
+    participants = df['participant_id'].unique()
+
+    # Define a fixed list of distinct colors for consistency
+    color_list = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b',
+                '#e377c2', '#7f7f7f', '#bcbd22', '#17becf', '#aec7e8', '#ffbb78',
+                '#98df8a', '#ff9896', '#c5b0d5', '#c49c94', '#f7b6d2', '#c7c7c7',
+                '#dbdb8d', '#9edae5', '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728',
+                '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
+
+    # Create a color map (participant_id -> color) using the predefined color list
+    alternate_color_map = {participant_id: color_list[i % len(color_list)] for i, participant_id in enumerate(participants)}
+
+    # Define the number of points for smooth curves
+    smooth_points = 300
+
+    # Split participants into 8 groups (6 participants per subplot for 2x4 layout)
+    groups = np.array_split(participants, 8)
+
+    # Create the plot with 2x4 subplots, each with up to 6 participants using the alternate color map
+    fig, axes = plt.subplots(2, 4, figsize=(18, 10))
+
+    # Flatten axes for easier iteration
+    axes = axes.flatten()
+
+    # Iterate over each group of participants (6 per subplot)
+    for i, group in enumerate(groups):
+        ax = axes[i]
+        
+        # Plot curves for each participant in the current group
+        for j, participant_id in enumerate(group):
+            # Filter the dataframe for the current participant
+            participant_data = df[df['participant_id'] == participant_id]
+            
+            # Remove duplicate age values to prevent issues with interpolation
+            participant_data = participant_data.drop_duplicates(subset='age')
+
+            # Sort the group by age to ensure smooth curves
+            participant_data = participant_data.sort_values(by='age')
+
+            # Generate smooth values for age
+            age_smooth = np.linspace(participant_data['age'].min(), participant_data['age'].max(), smooth_points)
+
+            # Apply quadratic spline interpolation
+            spline = make_interp_spline(participant_data['age'], participant_data['avg_intensity'], k=2)
+            intensity_smooth = spline(age_smooth)
+
+            # Use the alternate color map for the participant
+            color = alternate_color_map[participant_id]
+
+            # Plot the smooth curve
+            ax.plot(age_smooth, intensity_smooth, color=color, alpha=0.7, label=f'P{j + 1}')
+            
+            # Plot the original average intensity points
+            ax.scatter(participant_data['age'], participant_data['avg_intensity'], color=color, edgecolor='black', zorder=5)
+
+        # Add a legend with participant numbers (P1, P2, P3, ...)
+        ax.legend(title='Participants', loc='upper right')
+
+        # Customize each subplot
+        ax.set_title(f'Participants {i * 6 + 1} to {i * 6 + len(group)}', fontsize=12)
+        ax.set_xlabel('Age', fontsize=10)
+        ax.set_ylabel('Average Intensity', fontsize=10)
+        ax.grid(True)
+
+    # Adjust layout and show the plot
+    plt.tight_layout()
+    plt.show()
 
 def load_and_preprocess_data():
     
@@ -530,3 +666,8 @@ def load_and_preprocess_data():
 
 if __name__ == "__main__":
     load_and_preprocess_data()
+    # input_csv = './data/CP/trios_sorted_by_age.csv'  # Path to your input CSV
+
+    # process_csv_and_calculate_averages(input_csv)
+    # create_rainbow_plot(input_csv)
+   
