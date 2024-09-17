@@ -12,73 +12,136 @@ import matplotlib
 matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 from itertools import combinations
-# import nibabel as nib
+import nibabel as nib
 # from PIL import Image
 from torch.utils.data import Dataset
 # import cv2
 import torchvision.transforms as transforms
 from torchvision.transforms.functional import InterpolationMode
 import torch
+from torch.utils.data import Dataset
+import torchio as tio
+from torchio import transforms as tio_transforms
 
 class CP(Dataset):
-    def __init__(self, root='./data_midslice/affine-aligned-midslice/', transform=None, trainvaltest='train', opt = None):
+    def __init__(self, root_dir, age_csv, opt=None):
+        """
+        Args:
+            root_dir (string): Directory with all the trios of images (nii.gz).
+            age_csv (string): Path to the CSV file containing age information for target images.
+            opt (optional): Options for dataset processing, such as image size or voxel size.
+        """
+        self.root_dir = root_dir
 
-        self.trainvaltest = trainvaltest
-        self.imgdir = os.path.join(root, 'images/')
-        self.targetname = opt.targetname
+        # Load the CSV file with age and train/val/test information
+        self.age_info = pd.read_csv(age_csv)
 
-        if 'demoname' in opt:
-            meta = pd.read_csv(os.path.join(root, opt.demoname), index_col=0)
+        # Filter the CSV file to include only the trios marked for training
+        self.train_info = self.age_info[self.age_info["traintest"] == "train"].head(144)
+
+        # Set image dimensions for resizing (if needed)
+        # if opt is None or 'image_size' not in opt:
+        #     self.img_size = (64, 64, 64)  # Default image size for 3D data (depth, height, width)
+        # else:
+        #     self.img_size = opt['image_size']
+
+        # Set voxel size for resampling (default to 2mm isotropic)
+        if opt is None or 'voxel_size' not in opt:
+            self.voxel_size = (2, 2, 2)  # Default to 2mm isotropic voxel size
         else:
-            meta = pd.read_csv(os.path.join(root, 'demo-healthy-longitudinal.csv'), index_col=0)
+            self.voxel_size = opt['voxel_size']
 
-        meta = meta[meta.trainvaltest == trainvaltest].reset_index()
-        IDunq = np.unique(meta['Site-ID'])
-        index_combination = np.empty((0, 2))
-        for sid in IDunq:
-            indices = np.where(meta['Site-ID'] == sid)[0]
-            ### all possible pairs
-            tmp_combination = np.array(
-                np.meshgrid(np.array(range(len(indices))), np.array(range(len(indices))))).T.reshape(-1, 2)
-            index_combination = np.append(index_combination, indices[tmp_combination], 0)
+        # Define the transform to resample the image to 2mm isotropic voxel size
+        self.resample_transform = tio.Resample(self.voxel_size)
 
-        if opt == None:
-            img_height, img_width = [320, 300]
-        else:
-            img_height, img_width = opt.image_size
+        # # Define 3D resizing transform (optional)
+        # self.resize_transform = tio.Resize(self.img_size) if opt and 'image_size' in opt else None
 
-        self.resize = transforms.Compose([
-            transforms.Resize((img_height, img_width), Image.BICUBIC),
-            transforms.ToTensor(),
-        ])
+        # Collect all available trios marked as "train"
+        self.trio_paths = self.get_trio_paths()
 
-        self.index_combination = index_combination
-        self.transform = transform
-        self.demo = meta
+    def get_trio_paths(self):
+        """
+        Collects the paths to all trios that are marked for training in the CSV file.
+        """
+        trio_paths = []
+        for _, row in self.train_info.iterrows():
+            subject_id = row["sub_id_bids"]
+            trio_id = row["trio_id"]
+            trio_dir = os.path.join(self.root_dir, f"{subject_id}", f"{trio_id}")
 
-    def __getitem__(self, index):
-        index1, index2 = self.index_combination[index]
-        target1, target2 = self.demo[self.targetname][index1], self.demo[self.targetname][index2]
-        img1 = Image.open(os.path.join(self.imgdir, self.demo.fname[index1]))
-        img1 = self.resize(img1) 
-        img2 = Image.open(os.path.join(self.imgdir, self.demo.fname[index2]))
-        img2 = self.resize(img2) 
+            # Each subject might have multiple trios, check for .nii.gz files in the directory
+            nii_files = sorted([f for f in os.listdir(trio_dir) if f.endswith(".nii.gz")])
 
-        if self.transform:
-            augmentation = transforms.Compose([
-                transforms.RandomApply(torch.nn.ModuleList(
-                    [transforms.RandomAffine(degrees=(-10, 10), translate=(0.05,0.05), #scale=(0.9, 1.1),
-                                             interpolation=InterpolationMode.BILINEAR)]),
-                    p=0.5),
-            ])
+            # Ensure we have sets of 3 files (preceding, target, subsequent)
+            for i in range(0, len(nii_files) - 2, 3):
+                trio_paths.append((os.path.join(trio_dir, nii_files[i]),
+                                   os.path.join(trio_dir, nii_files[i + 1]),
+                                   os.path.join(trio_dir, nii_files[i + 2])))
 
-            img1 = augmentation(img1)
-            img2 = augmentation(img2)
-
-        return [np.array(img1), target1], [np.array(img2), target2]
+        return trio_paths
 
     def __len__(self):
-        return len(self.index_combination)
+        return len(self.trio_paths)
+
+    def load_and_normalize_nii(self, file_path):
+        """
+        Load a NIfTI file, normalize its pixel values to [0, 1], and apply resampling to the desired voxel size.
+        """
+        img = nib.load(file_path)
+        img_data = img.get_fdata()
+
+        # Normalize to [0, 1]
+        img_data_min = np.min(img_data)
+        img_data_max = np.max(img_data)
+
+        if img_data_max > img_data_min:  # Avoid division by zero
+            img_data = (img_data - img_data_min) / (img_data_max - img_data_min)
+        else:
+            img_data = np.zeros_like(img_data)
+
+        # Convert to TorchIO ScalarImage for resampling, ensuring float64 data type
+        tio_image = tio.ScalarImage(tensor=torch.tensor(img_data, dtype=torch.float64).unsqueeze(0))  # Add channel dimension
+
+        # Apply resampling transform (e.g., to 2mm isotropic voxel size)
+        resampled_image = self.resample_transform(tio_image)
+
+        return resampled_image.data  # Return the resampled tensor
+
+    def get_age_for_target(self, target_image_name):
+        """
+        Get the age of the target image from the CSV file.
+        """
+        age_row = self.train_info[self.train_info["scan_id"] == target_image_name].head(144)
+        if age_row.empty:
+            raise ValueError(f"Age information not found for image: {target_image_name}")
+
+        return age_row["age"].values[0]
+
+    def __getitem__(self, idx):
+        # Get the file paths for the trio
+        img_1_path, img_2_path, img_3_path = self.trio_paths[idx]
+
+        # Load, normalize, and resample each image in the trio
+        img_1 = self.load_and_normalize_nii(img_1_path)  # Preceding
+        img_2 = self.load_and_normalize_nii(img_2_path)  # Target
+        img_3 = self.load_and_normalize_nii(img_3_path)  # Subsequent
+
+        # Optionally resize the 3D images using torchio
+        # if self.resize_transform:
+        #     img_1 = torch.tensor(self.resize_transform(img_1))
+        #     img_2 = torch.tensor(self.resize_transform(img_2))
+        #     img_3 = torch.tensor(self.resize_transform(img_3))
+
+        # Get the target image's name and extract its age from the CSV
+        target_image_name = os.path.basename(img_2_path).replace(".nii.gz", "")
+        target_age = self.get_age_for_target(target_image_name)
+
+        # Convert age to tensor
+        age_tensor = torch.tensor([target_age], dtype=torch.float64)
+
+        # Return the preceding, target, subsequent images and the age
+        return img_1, img_2, img_3, age_tensor
 
 class BCP(Dataset):
     def __init__(self, root='./data_midslice/affine-aligned-midslice/', transform=None, trainvaltest='train', opt = None):
