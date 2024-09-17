@@ -421,13 +421,13 @@ def skull_strip(image_path, scan_id):
           f'{os.path.dirname(image_path)}/{scan_id}_skull.nii.gz -f 0.3 -g 0')
     print(f"Skull-stripped {os.path.basename(image_path)}")
     
-def create_df_CP(filename, path):
+def create_df_CP(filename, path, work_dir_rel_path):
     
     # Correct way to read the TSV data into a pandas DataFrame
     df = pd.read_csv(f'{path}/{filename}', sep='\t')
 
     # Add a new column 'n4_path' with the specified path format
-    df['n4_path'] = df.apply(lambda row: f'/home/andjela/joplin-intra-inter/work_dir/reg_n4_wdir/{row.participant_id}/{row.scan_id}/wf/n4/{row.scan_id}_corrected.nii.gz', axis=1)
+    df['n4_path'] = df.apply(lambda row: f'{work_dir_rel_path}/work_dir/reg_n4_wdir/{row.participant_id}/{row.scan_id}/wf/n4/{row.scan_id}_corrected.nii.gz', axis=1)
 
     # Filter to keep only subjects with >=3 timepoints
     data_T1w_long_subjects = df.groupby('sub_id_bids').filter(lambda x: len(x) >= 3)
@@ -480,7 +480,7 @@ def create_df_CP(filename, path):
 
             # Add a 'path' column for each trio based on participant_id and scan_id
             sorted_trio['path'] = sorted_trio.apply(
-                lambda row: f'/home/andjela/joplin-intra-inter/work_dir/reg_n4_wdir/{row.participant_id}/{row.scan_id}/wf/n4/{row.scan_id}_skull.nii.gz', axis=1)
+                lambda row: f'{work_dir_rel_path}/work_dir/reg_n4_wdir/{row.participant_id}/{row.scan_id}/wf/n4/{row.scan_id}_skull.nii.gz', axis=1)
             new_rows.extend(sorted_trio.itertuples(index=False))
             trio_number += 1  # Increment the trio number
         elif len(group) > 3:
@@ -494,7 +494,7 @@ def create_df_CP(filename, path):
                 sorted_trio_df['trio_id'] = f'trio-{trio_number:03d}'  # Assign trio number
                 sorted_trio_df['path'] = sorted_trio_df.apply(
                     # lambda row: f'/home/andjela/joplin-intra-inter/work_dir/reg_n4_wdir/{row.participant_id}/{row.scan_id}/wf/n4/{row.scan_id}_skull.nii.gz', axis=1)
-                    lambda row: f'/home/andjela/joplin-intra-inter/work_dir2/cbf2mni_wdir/{row.participant_id}/{row.scan_id}/wf/brainextraction/{row.scan_id}_dtype.nii.gz', axis=1)
+                    lambda row: f'{work_dir_rel_path}/work_dir2/cbf2mni_wdir/{row.participant_id}/{row.scan_id}/wf/brainextraction/{row.scan_id}_dtype.nii.gz', axis=1)
                 new_rows.extend(sorted_trio_df.itertuples(index=False))
                 trio_number += 1  # Increment the trio number
 
@@ -719,7 +719,8 @@ def load_and_preprocess_data():
     # Preprocess the data
     filename = 'all-participants.tsv'
     path = './data/CP'
-    ind_df, trios_data = create_df_CP(filename, path)
+    work_dir_rel_path = '/home/GRAMES.POLYMTL.CA/andim/intra-inter-ddfs'
+    ind_df, trios_data = create_df_CP(filename, path, work_dir_rel_path)
     preprocess_CP(ind_df, trios_data)
     
     # # Create a tf.data.Dataset

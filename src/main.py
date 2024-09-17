@@ -7,7 +7,7 @@ from model import DenoisingNetwork
 def main():
     # Load the CP dataset
     train_dataset = CP(root_dir='./data/CP/', age_csv='./data/CP/trios_sorted_by_age.csv')
-    train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True)
+    train_loader = DataLoader(train_dataset, batch_size=2, shuffle=True)
 
     # Define the model
     model = DenoisingNetwork(input_shape=(1, 256, 256, 105), filters=64, age_embedding_dim=128)
