@@ -1,21 +1,21 @@
 import os
 import numpy as np
+import h5py
 import pandas as pd
 import shutil
 import glob
 import time
 import nibabel as nib
 import seaborn as sns
+import SimpleITK as sitk
 from statsmodels.graphics.functional import rainbowplot
 from scipy.interpolate import make_interp_spline
 import matplotlib
-matplotlib.use('TkAgg')
+# matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 from itertools import combinations
 import nibabel as nib
-# from PIL import Image
 from torch.utils.data import Dataset
-# import cv2
 import torchvision.transforms as transforms
 from torchvision.transforms.functional import InterpolationMode
 import torch
@@ -203,6 +203,45 @@ class BCP(Dataset):
     def __len__(self):
         return len(self.index_combination)
     
+def read_ANTs_transform(transform_path):
+    """
+    Read an ANTs transform file and return the affine matrix.
+    """
+     # Open the HDF5 file
+    with h5py.File(transform_path, 'r') as h5_file:
+        # Extract TransformType and TransformParameters from TransformGroup/1
+        transform_type = h5_file['TransformGroup/1/TransformType'][()]
+        transform_parameters = h5_file['TransformGroup/1/TransformParameters'][()]
+        transform_fixed_parameters = h5_file['TransformGroup/1/TransformFixedParameters'][()]
+
+        # Reshape the transform parameters to get the affine matrix (3x3)
+        affine_matrix = transform_parameters[:9].reshape((3, 3))
+        translation_vector = transform_parameters[9:]
+        
+
+        return affine_matrix, translation_vector
+
+def extract_scaling_and_shearing(affine_matrix):
+    # Ensure affine_matrix is a 3x3 matrix
+    assert affine_matrix.shape == (3, 3), "The affine matrix must be 3x3."
+
+    # Step 1: Extract scaling factors
+    # Scaling factors are the lengths of the column vectors of the affine matrix
+    scaling_factors = np.linalg.norm(affine_matrix, axis=0)
+
+    # Step 2: Normalize the affine matrix by the scaling factors to extract shear and rotation
+    normalized_matrix = affine_matrix / scaling_factors
+
+    # Step 3: Extract shearing components
+    # The upper triangular part of the normalized matrix represents shearing
+    shear_xy = normalized_matrix[0, 1]  # Shear between X and Y
+    shear_xz = normalized_matrix[0, 2]  # Shear between X and Z
+    shear_yz = normalized_matrix[1, 2]  # Shear between Y and Z
+
+    shear_factors = [shear_xy, shear_xz, shear_yz]
+
+    return scaling_factors, shear_factors
+    
 def preprocess_BCP(filename, path):
     
     # filename = 'HCPBaby_image03_xnat_T1wT2w_2022-01-26.xlsx'
@@ -388,7 +427,7 @@ def preprocess_BCP(filename, path):
     # # data_T1w_long_subjects_slice.fname = 'images/' + data_T1w_long_subjects['Site-ID'] + '_' + data_T1w_long_subjects['session-id'] + '.png'
     # # data_T1w_long_subjects_slice.to_csv(f'{outdir}/demo-healthy-longitudinal.csv')
 
-# Function to perform registration
+# Function to perform rigid registration
 def perform_registration(mov_path, fix_path, scan_id_mov, scan_id_fix, save_path):
     # Placeholder for actual registration code
     # e.g., using an image processing library like SimpleITK or ANTs
@@ -406,6 +445,48 @@ def perform_registration(mov_path, fix_path, scan_id_mov, scan_id_fix, save_path
             f"--smoothing-sigmas 2x1x0vox " \
             f"--verbose 1"
             )
+    
+# Function to perform affine registration
+def perform_affine_registration(mov_path, fix_path, scan_id_mov, scan_id_fix, save_path):
+    # Placeholder for actual registration code
+    # e.g., using an image processing library like SimpleITK or ANTs
+    print(f"Registering {os.path.basename(mov_path)} to {os.path.basename(fix_path)}")
+    os.system(f"antsRegistration --float 0 --collapse-output-transforms 1 --dimensionality 3 " \
+            f"--initial-moving-transform [ {fix_path}, {mov_path}, 1 ] " \
+            f"--initialize-transforms-per-stage 0 " \
+            f"--interpolation Linear " \
+            f"--output [ {save_path}/mov2fix_{scan_id_mov}_{scan_id_fix}, {save_path}/{scan_id_mov}.nii.gz ] " \
+            f"--transform Affine[ 0.1 ] " \
+            f"--metric Mattes[ {fix_path}, {mov_path}, 1, 32, Regular, 0.3 ] " \
+            f"--convergence [ 500x250x100, 1e-6, 10 ] " \
+            f"--shrink-factors 4x2x1 " \
+            f"--smoothing-sigmas 2x1x0vox " \
+            f"--use-histogram-matching 1 " \
+            f"--winsorize-image-intensities [ 0.005, 0.995 ] " \
+            f"--write-composite-transform 1 " \
+            f"--verbose 1"
+            )
+    # os.system(f"antsRegistration --float 0 --dimensionality 3 " \
+    #         f"--initial-moving-transform [ {fix_path}, {mov_path}, 1 ] " \
+    #         f"--initialize-transforms-per-stage 0 " \
+    #         f"--interpolation Linear " \
+    #         f"--output [ {save_path}/mov2fix_{scan_id_mov}_{scan_id_fix}, {save_path}/{scan_id_mov}.nii.gz ] " \
+    #         f"--transform Rigid[ 0.1 ] " \
+    #         f"--metric Mattes[ {fix_path}, {mov_path}, 1, 32, Regular, 0.3 ] " \
+    #         f"--convergence [ 500x250x100, 1e-6, 10 ] " \
+    #         f"--shrink-factors 4x2x1 " \
+    #         f"--smoothing-sigmas 2x1x0vox " \
+    #         f"--use-histogram-matching 1 " \
+    #         f"--transform Affine[ 0.1 ] " \
+    #         f"--metric Mattes[ {fix_path}, {mov_path}, 1, 32, Regular, 0.3 ] " \
+    #         f"--convergence [ 500x250x100, 1e-6, 10 ] " \
+    #         f"--shrink-factors 4x2x1 " \
+    #         f"--smoothing-sigmas 2x1x0vox " \
+    #         f"--use-histogram-matching 1 " \
+    #         f"--winsorize-image-intensities [ 0.005, 0.995 ] " \
+    #         f"--write-composite-transform 1 " \
+    #         f"--verbose 1"
+    #         )
 
 # Function to skull-strip an image
 def skull_strip(image_path, scan_id):
@@ -524,7 +605,6 @@ def preprocess_CP(df, trios_df):
     
     # Rigid reg to middle time point
     processed_pairs = set()
-    
     # Dictionary to store previous paths for already registered pairs
     saved_paths_for_pairs = {}
     # Iterate through each subject in the DataFrame
@@ -533,55 +613,58 @@ def preprocess_CP(df, trios_df):
         trios = [group.iloc[i:i+3] for i in range(0, len(group), 3)]
         
         for trio in trios:
-            # Extract the paths for the trio
-            path_1 = trio.iloc[0]['path']
-            path_2 = trio.iloc[1]['path']  # This is the reference
-            path_3 = trio.iloc[2]['path']
+            # Skip trios before trio-194
+            if trio.iloc[1]["trio_id"] < 'trio-194':
+                continue
+            
+            # Process only trios starting from trio-194
+            if trio.iloc[1]["trio_id"] >= 'trio-194':
+                # Extract the paths for the trio
+                path_1 = trio.iloc[0]['path']
+                path_2 = trio.iloc[1]['path']  # This is the reference
+                path_3 = trio.iloc[2]['path']
 
-            # Create a directory to save the preprocessed images if it doesn't exist
-            save_path = f'./data/CP/{sub_id}/{trio.iloc[1]["trio_id"]}/'
-            if not os.path.exists(save_path):
-                os.makedirs(save_path)
+                # Create a directory to save the preprocessed images if it doesn't exist
+                save_path = f'./data/CP/{sub_id}/{trio.iloc[1]["trio_id"]}/'
+                if not os.path.exists(save_path):
+                    os.makedirs(save_path)
 
-            # Create a tuple to represent the scan pair (scan_1 -> scan_2)
-            pair_1_to_2 = (trio.iloc[0]['scan_id'], trio.iloc[1]['scan_id'])
-            pair_3_to_2 = (trio.iloc[2]['scan_id'], trio.iloc[1]['scan_id'])
+                # Create a tuple to represent the scan pair (scan_1 -> scan_2)
+                pair_1_to_2 = (trio.iloc[0]['scan_id'], trio.iloc[1]['scan_id'])
+                pair_3_to_2 = (trio.iloc[2]['scan_id'], trio.iloc[1]['scan_id'])
 
-            # Save scan_2 in dedicated space (./data/CP/sub_id_bids/trio_id/) if not already there
-            if not os.path.exists(f'{save_path}/{os.path.basename(path_2)}'):
-                shutil.copy(path_2, f'{save_path}/{trio.iloc[1]['scan_id']}.nii.gz')
+                # Save scan_2 in dedicated space (./data/CP/sub_id_bids/trio_id/) if not already there
+                if not os.path.exists(f'{save_path}/{os.path.basename(path_2)}'):
+                    shutil.copy(path_2, f'{save_path}/{trio.iloc[1]["scan_id"]}.nii.gz')
 
-            # If pair_1_to_2 has been processed, copy the previous scan_1 to the current trio directory
-            if pair_1_to_2 not in saved_paths_for_pairs:
-                # If the pair has not been processed, perform registration and save the path
-                perform_registration(path_1, path_2, trio.iloc[0]['scan_id'], trio.iloc[1]['scan_id'], save_path)
-                # # Copy scan_1 to the current trio's directory
-                # shutil.copy(path_1, f'{save_path}/{trio.iloc[0]["scan_id"]}.nii.gz')
-                # Save the path where scan_1 is saved
-                saved_paths_for_pairs[pair_1_to_2] = f'{save_path}/{trio.iloc[0]["scan_id"]}.nii.gz'
-                # Add the pair to the processed set
-                processed_pairs.add(pair_1_to_2)
-            else:
-                previous_scan_1_path = saved_paths_for_pairs[pair_1_to_2]
-                shutil.copy(previous_scan_1_path, f'{save_path}/{trio.iloc[0]["scan_id"]}.nii.gz')
+                # If pair_1_to_2 has been processed, copy the previous scan_1 to the current trio directory
+                if pair_1_to_2 not in saved_paths_for_pairs:
+                    # If the pair has not been processed, perform registration and save the path
+                    perform_registration(path_1, path_2, trio.iloc[0]['scan_id'], trio.iloc[1]['scan_id'], save_path)
+                    # perform_affine_registration(path_1, path_2, trio.iloc[0]['scan_id'], trio.iloc[1]['scan_id'], save_path)
+                    # Save the path where scan_1 is saved
+                    saved_paths_for_pairs[pair_1_to_2] = f'{save_path}/{trio.iloc[0]["scan_id"]}.nii.gz'
+                    # Add the pair to the processed set
+                    processed_pairs.add(pair_1_to_2)
+                else:
+                    previous_scan_1_path = saved_paths_for_pairs[pair_1_to_2]
+                    shutil.copy(previous_scan_1_path, f'{save_path}/{trio.iloc[0]["scan_id"]}.nii.gz')
 
-            # Perform registration for scan_3 -> scan_2 if it hasn't been processed yet
-            if pair_3_to_2 not in processed_pairs:
-                perform_registration(path_3, path_2, trio.iloc[2]['scan_id'], trio.iloc[1]['scan_id'], save_path)
-                # Save the path where scan_3 is saved
-                saved_paths_for_pairs[pair_3_to_2] = f'{save_path}/{trio.iloc[2]["scan_id"]}.nii.gz'
-                # Add the pair to the processed set
-                processed_pairs.add(pair_3_to_2)
-            else:
-                # Copy the already registered scan_3 from previous trio to the current trio directory
-                previous_scan_3_path = saved_paths_for_pairs[pair_3_to_2]
-                shutil.copy(previous_scan_3_path, f'{save_path}/{trio.iloc[2]["scan_id"]}.nii.gz')
+                # Perform registration for scan_3 -> scan_2 if it hasn't been processed yet
+                if pair_3_to_2 not in processed_pairs:
+                    perform_registration(path_3, path_2, trio.iloc[2]['scan_id'], trio.iloc[1]['scan_id'], save_path)
+                    # perform_affine_registration(path_3, path_2, trio.iloc[2]['scan_id'], trio.iloc[1]['scan_id'], save_path)
+                    # Save the path where scan_3 is saved
+                    saved_paths_for_pairs[pair_3_to_2] = f'{save_path}/{trio.iloc[2]["scan_id"]}.nii.gz'
+                    # Add the pair to the processed set
+                    processed_pairs.add(pair_3_to_2)
+                else:
+                    # Copy the already registered scan_3 from previous trio to the current trio directory
+                    previous_scan_3_path = saved_paths_for_pairs[pair_3_to_2]
+                    shutil.copy(previous_scan_3_path, f'{save_path}/{trio.iloc[2]["scan_id"]}.nii.gz')
 
-            # # Perform registration on scan_1 -> scan_2 and scan_3 -> scan_2
-            # perform_registration(path_1, path_2, trio.iloc[0]['scan_id'], trio.iloc[1]['scan_id'], save_path)
-            # perform_registration(path_3, path_2, trio.iloc[2]['scan_id'], trio.iloc[1]['scan_id'], save_path)
-            print('Done')
-            # os.path.dirname(image_path)
+                print('Done with trio:', trio.iloc[1]["trio_id"])
+
 
 
 def calculate_avg_intensity(img_path):
@@ -720,6 +803,7 @@ def load_and_preprocess_data():
     filename = 'all-participants.tsv'
     path = './data/CP'
     work_dir_rel_path = '/home/GRAMES.POLYMTL.CA/andim/intra-inter-ddfs'
+    # work_dir_rel_path = '/home/andjela/joplin-intra-inter'
     ind_df, trios_data = create_df_CP(filename, path, work_dir_rel_path)
     preprocess_CP(ind_df, trios_data)
     
@@ -734,4 +818,14 @@ if __name__ == "__main__":
 
     # process_csv_and_calculate_averages(input_csv)
     # create_rainbow_plot(input_csv)
+    # transform_path = '/home/andjela/Documents/longitudinal-pediatric-completion/data/CP/sub-001/trio-001/mov2fix_PS14_001_PS14_053Composite.h5'
+    # # Step 1: Extract the affine matrix from the h5 file
+    # affine_matrix, translation_vector = read_ANTs_transform(transform_path)
+
+    # # Step 2: Extract scaling and shearing from the affine matrix
+    # scaling, shearing = extract_scaling_and_shearing(affine_matrix)
+
+    # print("Scaling:", scaling)
+    # print("Shearing:", shearing)
+    # print("Translation:", translation_vector)
    
