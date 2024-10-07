@@ -241,6 +241,54 @@ def extract_scaling_and_shearing(affine_matrix):
     shear_factors = [shear_xy, shear_xz, shear_yz]
 
     return scaling_factors, shear_factors
+
+def process_csv_and_calculate_scaling_factors(csv_file_path, rel_path):
+    """
+    Processes the CSV file, calculates the scaling factors for each transform file,
+    and stores the result in new columns for scaling factors.
+    
+    Parameters:
+        csv_file_path (str): Path to the input CSV file.
+    """
+    # Load the CSV file
+    df = pd.read_csv(csv_file_path)
+
+    # Iterate through each row and calculate/store the scaling factors
+    for idx, row in df.iterrows():
+        transform_path = row['transform_path']
+        scan_id = row['scan_id']
+        # Check if transform_path is NaN (true for each middle scan for trio)
+        if pd.isna(transform_path):
+            # Set scaling factors to 1.0 when transform_path is NaN
+            df.at[idx, 'scaling_x'] = 1.0
+            df.at[idx, 'scaling_y'] = 1.0
+            df.at[idx, 'scaling_z'] = 1.0
+            df.at[idx, 'scaling_avg'] = 1.0
+            continue
+        
+        print(transform_path)
+        rel_transform_path = f"{rel_path}/{transform_path[6:]}"  # Path to the ANTs transform file
+
+        try:
+            # Read the affine matrix from the ANTs transform
+            affine_matrix, _ = read_ANTs_transform(rel_transform_path)
+            
+            # Extract scaling factors
+            scaling_factors, _ = extract_scaling_and_shearing(affine_matrix)
+        except Exception as e:
+            print(f"Error processing transform for scan_id {scan_id}: {e}")
+            scaling_factors = [np.nan, np.nan, np.nan]  # If there's an error, store NaN
+
+        # Add the scaling factors to the DataFrame
+        df.at[idx, 'scaling_x'] = scaling_factors[0]
+        df.at[idx, 'scaling_y'] = scaling_factors[1]
+        df.at[idx, 'scaling_z'] = scaling_factors[2]
+        # Calculate geometric mean of scaling factors
+        df.at[idx, 'scaling_avg'] = (scaling_factors[0] * scaling_factors[1] * scaling_factors[2]) ** (1/3)
+
+    # Save the updated DataFrame with the new columns for scaling factors
+    df.to_csv(csv_file_path, index=False)
+
     
 def preprocess_BCP(filename, path):
     
@@ -455,7 +503,7 @@ def perform_affine_registration(mov_path, fix_path, scan_id_mov, scan_id_fix, sa
             f"--initial-moving-transform [ {fix_path}, {mov_path}, 1 ] " \
             f"--initialize-transforms-per-stage 0 " \
             f"--interpolation Linear " \
-            f"--output [ {save_path}/mov2fix_{scan_id_mov}_{scan_id_fix}, {save_path}/{scan_id_mov}.nii.gz ] " \
+            f"--output [ {save_path}/affine_mov2fix_{scan_id_mov}_{scan_id_fix}, {save_path}/{scan_id_mov}_affine.nii.gz ] " \
             f"--transform Affine[ 0.1 ] " \
             f"--metric Mattes[ {fix_path}, {mov_path}, 1, 32, Regular, 0.3 ] " \
             f"--convergence [ 500x250x100, 1e-6, 10 ] " \
@@ -613,58 +661,197 @@ def preprocess_CP(df, trios_df):
         trios = [group.iloc[i:i+3] for i in range(0, len(group), 3)]
         
         for trio in trios:
-            # Skip trios before trio-194
-            if trio.iloc[1]["trio_id"] < 'trio-194':
-                continue
-            
-            # Process only trios starting from trio-194
-            if trio.iloc[1]["trio_id"] >= 'trio-194':
-                # Extract the paths for the trio
-                path_1 = trio.iloc[0]['path']
-                path_2 = trio.iloc[1]['path']  # This is the reference
-                path_3 = trio.iloc[2]['path']
+            # Extract the paths for the trio
+            path_1 = trio.iloc[0]['path']
+            path_2 = trio.iloc[1]['path']  # This is the reference
+            path_3 = trio.iloc[2]['path']
 
-                # Create a directory to save the preprocessed images if it doesn't exist
-                save_path = f'./data/CP/{sub_id}/{trio.iloc[1]["trio_id"]}/'
-                if not os.path.exists(save_path):
-                    os.makedirs(save_path)
+            # Create a directory to save the preprocessed images if it doesn't exist
+            save_path = f'./data/CP/{sub_id}/{trio.iloc[1]["trio_id"]}/'
+            if not os.path.exists(save_path):
+                os.makedirs(save_path)
 
-                # Create a tuple to represent the scan pair (scan_1 -> scan_2)
-                pair_1_to_2 = (trio.iloc[0]['scan_id'], trio.iloc[1]['scan_id'])
-                pair_3_to_2 = (trio.iloc[2]['scan_id'], trio.iloc[1]['scan_id'])
+            # Create a tuple to represent the scan pair (scan_1 -> scan_2)
+            pair_1_to_2 = (trio.iloc[0]['scan_id'], trio.iloc[1]['scan_id'])
+            pair_3_to_2 = (trio.iloc[2]['scan_id'], trio.iloc[1]['scan_id'])
 
-                # Save scan_2 in dedicated space (./data/CP/sub_id_bids/trio_id/) if not already there
-                if not os.path.exists(f'{save_path}/{os.path.basename(path_2)}'):
-                    shutil.copy(path_2, f'{save_path}/{trio.iloc[1]["scan_id"]}.nii.gz')
+            # Save scan_2 in dedicated space (./data/CP/sub_id_bids/trio_id/) if not already there
+            if not os.path.exists(f'{save_path}/{os.path.basename(path_2)}'):
+                shutil.copy(path_2, f'{save_path}/{trio.iloc[1]["scan_id"]}.nii.gz')
 
-                # If pair_1_to_2 has been processed, copy the previous scan_1 to the current trio directory
-                if pair_1_to_2 not in saved_paths_for_pairs:
-                    # If the pair has not been processed, perform registration and save the path
-                    perform_registration(path_1, path_2, trio.iloc[0]['scan_id'], trio.iloc[1]['scan_id'], save_path)
-                    # perform_affine_registration(path_1, path_2, trio.iloc[0]['scan_id'], trio.iloc[1]['scan_id'], save_path)
-                    # Save the path where scan_1 is saved
-                    saved_paths_for_pairs[pair_1_to_2] = f'{save_path}/{trio.iloc[0]["scan_id"]}.nii.gz'
-                    # Add the pair to the processed set
-                    processed_pairs.add(pair_1_to_2)
-                else:
-                    previous_scan_1_path = saved_paths_for_pairs[pair_1_to_2]
-                    shutil.copy(previous_scan_1_path, f'{save_path}/{trio.iloc[0]["scan_id"]}.nii.gz')
+            # If pair_1_to_2 has been processed, copy the previous scan_1 to the current trio directory
+            if pair_1_to_2 not in saved_paths_for_pairs:
+                # If the pair has not been processed, perform registration and save the path
+                perform_registration(path_1, path_2, trio.iloc[0]['scan_id'], trio.iloc[1]['scan_id'], save_path)
+                # perform_affine_registration(path_1, path_2, trio.iloc[0]['scan_id'], trio.iloc[1]['scan_id'], save_path)
+                # Save the path where scan_1 is saved
+                saved_paths_for_pairs[pair_1_to_2] = f'{save_path}/{trio.iloc[0]["scan_id"]}.nii.gz'
+                # Add the pair to the processed set
+                processed_pairs.add(pair_1_to_2)
+            else:
+                previous_scan_1_path = saved_paths_for_pairs[pair_1_to_2]
+                shutil.copy(previous_scan_1_path, f'{save_path}/{trio.iloc[0]["scan_id"]}.nii.gz')
 
-                # Perform registration for scan_3 -> scan_2 if it hasn't been processed yet
-                if pair_3_to_2 not in processed_pairs:
-                    perform_registration(path_3, path_2, trio.iloc[2]['scan_id'], trio.iloc[1]['scan_id'], save_path)
-                    # perform_affine_registration(path_3, path_2, trio.iloc[2]['scan_id'], trio.iloc[1]['scan_id'], save_path)
-                    # Save the path where scan_3 is saved
-                    saved_paths_for_pairs[pair_3_to_2] = f'{save_path}/{trio.iloc[2]["scan_id"]}.nii.gz'
-                    # Add the pair to the processed set
-                    processed_pairs.add(pair_3_to_2)
-                else:
-                    # Copy the already registered scan_3 from previous trio to the current trio directory
-                    previous_scan_3_path = saved_paths_for_pairs[pair_3_to_2]
-                    shutil.copy(previous_scan_3_path, f'{save_path}/{trio.iloc[2]["scan_id"]}.nii.gz')
+            # Perform registration for scan_3 -> scan_2 if it hasn't been processed yet
+            if pair_3_to_2 not in processed_pairs:
+                perform_registration(path_3, path_2, trio.iloc[2]['scan_id'], trio.iloc[1]['scan_id'], save_path)
+                # perform_affine_registration(path_3, path_2, trio.iloc[2]['scan_id'], trio.iloc[1]['scan_id'], save_path)
+                # Save the path where scan_3 is saved
+                saved_paths_for_pairs[pair_3_to_2] = f'{save_path}/{trio.iloc[2]["scan_id"]}.nii.gz'
+                # Add the pair to the processed set
+                processed_pairs.add(pair_3_to_2)
+            else:
+                # Copy the already registered scan_3 from previous trio to the current trio directory
+                previous_scan_3_path = saved_paths_for_pairs[pair_3_to_2]
+                shutil.copy(previous_scan_3_path, f'{save_path}/{trio.iloc[2]["scan_id"]}.nii.gz')
 
-                print('Done with trio:', trio.iloc[1]["trio_id"])
+            print('Done with trio:', trio.iloc[1]["trio_id"])
 
+def preprocess_affine_CP(df, trios_df):
+    # # Skull-strip each N4 corrected scan with 2 times bet command
+    # start_time = time.time()
+    # # Only to be done on participants which have multiple time points
+    # for index, row in df.iterrows():
+    #     if row['scan_id'] in trios_df['scan_id'].values:
+    #         print(f'Scan nbr: {index}')
+    #         skull_strip(row.n4_path, row.scan_id)
+    # end_time = time.time()
+
+    # # Calculate the duration
+    # duration = end_time - start_time
+
+    # # Print the time taken
+    # print(f"Time taken for skull stripping: {duration} seconds")
+    
+    # Rigid reg to middle time point
+    processed_pairs = set()
+    # Dictionary to store previous paths for already registered pairs
+    saved_paths_for_pairs = {}
+    # Iterate through each subject in the DataFrame
+    for sub_id, group in trios_df.groupby('sub_id_bids'):
+        # Since the data is grouped by subject, each group represents a subject with multiple trios
+        trios = [group.iloc[i:i+3] for i in range(0, len(group), 3)]
+        
+        for trio in trios:
+            # Extract the paths for the trio
+            path_1 = trio.iloc[0]['path']
+            path_2 = trio.iloc[1]['path']  # This is the reference
+            path_3 = trio.iloc[2]['path']
+
+            # Create a directory to save the preprocessed images if it doesn't exist
+            save_path = f'./data/CP/{sub_id}/{trio.iloc[1]["trio_id"]}/'
+            if not os.path.exists(save_path):
+                os.makedirs(save_path)
+
+            # Create a tuple to represent the scan pair (scan_1 -> scan_2)
+            pair_1_to_2 = (trio.iloc[0]['scan_id'], trio.iloc[1]['scan_id'])
+            pair_3_to_2 = (trio.iloc[2]['scan_id'], trio.iloc[1]['scan_id'])
+
+            # Save scan_2 in dedicated space (./data/CP/sub_id_bids/trio_id/) if not already there
+            if not os.path.exists(f'{save_path}/{os.path.basename(path_2)}'):
+                shutil.copy(path_2, f'{save_path}/{trio.iloc[1]["scan_id"]}.nii.gz')
+
+            # If pair_1_to_2 has been processed, copy the previous scan_1 to the current trio directory
+            if pair_1_to_2 not in saved_paths_for_pairs:
+                # If the pair has not been processed, perform registration and save the path
+                perform_affine_registration(path_1, path_2, trio.iloc[0]['scan_id'], trio.iloc[1]['scan_id'], save_path)
+                # Save the path where scan_1 is saved
+                saved_paths_for_pairs[pair_1_to_2] = f'{save_path}/{trio.iloc[0]["scan_id"]}.nii.gz'
+                # Add the pair to the processed set
+                processed_pairs.add(pair_1_to_2)
+            else:
+                previous_scan_1_path = saved_paths_for_pairs[pair_1_to_2]
+                shutil.copy(previous_scan_1_path, f'{save_path}/{trio.iloc[0]["scan_id"]}.nii.gz')
+
+            # Perform registration for scan_3 -> scan_2 if it hasn't been processed yet
+            if pair_3_to_2 not in processed_pairs:
+                perform_affine_registration(path_3, path_2, trio.iloc[2]['scan_id'], trio.iloc[1]['scan_id'], save_path)
+                # Save the path where scan_3 is saved
+                saved_paths_for_pairs[pair_3_to_2] = f'{save_path}/{trio.iloc[2]["scan_id"]}.nii.gz'
+                # Add the pair to the processed set
+                processed_pairs.add(pair_3_to_2)
+            else:
+                # Copy the already registered scan_3 from previous trio to the current trio directory
+                previous_scan_3_path = saved_paths_for_pairs[pair_3_to_2]
+                shutil.copy(previous_scan_3_path, f'{save_path}/{trio.iloc[2]["scan_id"]}.nii.gz')
+
+            print('Done with trio:', trio.iloc[1]["trio_id"])
+
+def save_transform_paths_CP(csv_file_path):
+    """
+    Processes scan pairs from the input CSV, stores paths to transformation files for each pair,
+    and updates the CSV with the transformation paths on the first and last lines of each trio.
+    
+    Parameters:
+        csv_file_path (str): Path to the input CSV file.
+    """
+    # Load the CSV file
+    df = pd.read_csv(csv_file_path)
+
+    processed_pairs = set()  # Track processed scan pairs
+    saved_paths_for_pairs = {}  # Store previous paths for registered pairs
+
+    # Iterate through each subject in the DataFrame
+    for sub_id, group in df.groupby('sub_id_bids'):
+        # Since the data is grouped by subject, each group represents a subject with multiple trios
+        trios = [group.iloc[i:i + 3] for i in range(0, len(group), 3)]
+        
+        for trio in trios:
+            # Extract the paths for the trio
+            path_1 = trio.iloc[0]['path']
+            path_2 = trio.iloc[1]['path']  # This is the reference
+            path_3 = trio.iloc[2]['path']
+
+            trio_id = trio.iloc[1]['trio_id']  # Using trio_id from the second scan
+
+            # Create tuples to represent the scan pairs (scan_1 -> scan_2 and scan_3 -> scan_2)
+            pair_1_to_2 = (trio.iloc[0]['scan_id'], trio.iloc[1]['scan_id'])
+            pair_3_to_2 = (trio.iloc[2]['scan_id'], trio.iloc[1]['scan_id'])
+
+            # Define paths for the transformation files
+            transform_1_to_2 = f'./data/CP/{sub_id}/{trio_id}/mov2fix_{pair_1_to_2[0]}_{pair_1_to_2[1]}Composite.h5'
+            transform_3_to_2 = f'./data/CP/{sub_id}/{trio_id}/mov2fix_{pair_3_to_2[0]}_{pair_3_to_2[1]}Composite.h5'
+
+            ### Handle pair_1_to_2 (scan_1 -> scan_2)
+            if pair_1_to_2 not in saved_paths_for_pairs:
+                # If the pair has not been processed yet, save the transformation path
+                saved_paths_for_pairs[pair_1_to_2] = transform_1_to_2
+
+                # Add the transform path to the DataFrame (on the first row of the trio)
+                df.loc[trio.index[0], 'transform_path'] = transform_1_to_2
+                print(f"Storing transform path for scan {pair_1_to_2[0]} to {pair_1_to_2[1]}: {transform_1_to_2}")
+
+                # Add the pair to the processed set
+                processed_pairs.add(pair_1_to_2)
+            else:
+                # If already processed, reuse the transformation file from the previous registration
+                previous_transform_1_to_2 = saved_paths_for_pairs[pair_1_to_2]
+                df.loc[trio.index[0], 'transform_path'] = previous_transform_1_to_2
+                print(f"Reusing existing transform path for scan {pair_1_to_2[0]} to {pair_1_to_2[1]}")
+
+            ### Handle pair_3_to_2 (scan_3 -> scan_2)
+            if pair_3_to_2 not in saved_paths_for_pairs:
+                # If the pair has not been processed yet, save the transformation path
+                saved_paths_for_pairs[pair_3_to_2] = transform_3_to_2
+
+                # Add the transform path to the DataFrame (on the third row of the trio)
+                df.loc[trio.index[2], 'transform_path'] = transform_3_to_2
+                print(f"Storing transform path for scan {pair_3_to_2[0]} to {pair_3_to_2[1]}: {transform_3_to_2}")
+
+                # Add the pair to the processed set
+                processed_pairs.add(pair_3_to_2)
+            else:
+                # If already processed, reuse the transformation file from the previous registration
+                previous_transform_3_to_2 = saved_paths_for_pairs[pair_3_to_2]
+                df.loc[trio.index[2], 'transform_path'] = previous_transform_3_to_2
+                print(f"Reusing existing transform path for scan {pair_3_to_2[0]} to {pair_3_to_2[1]}")
+
+            print(f"Done with trio: {trio_id}")
+
+    # Save the updated DataFrame to a new CSV file
+    updated_csv_path = csv_file_path.replace(".csv", "_with_transforms.csv")
+    df.to_csv(updated_csv_path, index=False)
+    print(f"Updated CSV saved to {updated_csv_path}")
 
 
 def calculate_avg_intensity(img_path):
@@ -714,29 +901,39 @@ def process_csv_and_calculate_averages(csv_file_path):
 
         # Add the average intensity value to the DataFrame
         df.at[idx, 'avg_intensity'] = avg_intensity
-
+        print('Processed scan:', scan_id)
     # Save the updated DataFrame with the new column
     df.to_csv(csv_file_path, index=False)
 
-def create_rainbow_plot(csv_file_path):
+
+def create_rainbow_plot(input_csv, value_column, y_title):
     """
-    Creates a rainbow plot using statsmodels' rainbowplot function, 
-    plotting the curves of average intensity values over age.
-    
+    Creates a rainbow plot plotting the curves of the specified values over age.
+
     Parameters:
-        csv_file_path (str): Path to the input CSV file.
+        input_csv (str): Path to the input CSV file.
+        value_column (str): The column in the DataFrame to be plotted (e.g., 'avg_intensity', 'scaling_avg').
+        y_title (str): Label for the Y-axis (e.g., 'Average Intensity', 'Scaling Avg').
     """
-    df = pd.read_csv(csv_file_path)
+    # Load the CSV file
+    df = pd.read_csv(input_csv)
     
-        # Get the unique participant ids
-    participants = df['participant_id'].unique()
+    # Step 1: Remove rows with NaN or inf values in value_column or 'age' columns
+    df_cleaned = df.dropna(subset=[value_column, 'age'])
+    df_cleaned = df_cleaned[np.isfinite(df_cleaned[value_column]) & np.isfinite(df_cleaned['age'])]
+
+    # Step 2: Group by 'participant_id' and 'age', then take the mean of only the numeric columns (e.g., value_column)
+    df_grouped = df_cleaned.groupby(['participant_id', 'age'], as_index=False)[[value_column]].mean()
+
+    # Get the unique participant ids
+    participants = df_grouped['participant_id'].unique()
 
     # Define a fixed list of distinct colors for consistency
     color_list = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b',
-                '#e377c2', '#7f7f7f', '#bcbd22', '#17becf', '#aec7e8', '#ffbb78',
-                '#98df8a', '#ff9896', '#c5b0d5', '#c49c94', '#f7b6d2', '#c7c7c7',
-                '#dbdb8d', '#9edae5', '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728',
-                '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
+                  '#e377c2', '#7f7f7f', '#bcbd22', '#17becf', '#aec7e8', '#ffbb78',
+                  '#98df8a', '#ff9896', '#c5b0d5', '#c49c94', '#f7b6d2', '#c7c7c7',
+                  '#dbdb8d', '#9edae5', '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728',
+                  '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
 
     # Create a color map (participant_id -> color) using the predefined color list
     alternate_color_map = {participant_id: color_list[i % len(color_list)] for i, participant_id in enumerate(participants)}
@@ -760,10 +957,11 @@ def create_rainbow_plot(csv_file_path):
         # Plot curves for each participant in the current group
         for j, participant_id in enumerate(group):
             # Filter the dataframe for the current participant
-            participant_data = df[df['participant_id'] == participant_id]
-            
-            # Remove duplicate age values to prevent issues with interpolation
-            participant_data = participant_data.drop_duplicates(subset='age')
+            participant_data = df_grouped[df_grouped['participant_id'] == participant_id]
+
+            # If there's no data left after filtering, skip this participant
+            if len(participant_data) == 0:
+                continue
 
             # Sort the group by age to ensure smooth curves
             participant_data = participant_data.sort_values(by='age')
@@ -772,7 +970,7 @@ def create_rainbow_plot(csv_file_path):
             age_smooth = np.linspace(participant_data['age'].min(), participant_data['age'].max(), smooth_points)
 
             # Apply quadratic spline interpolation
-            spline = make_interp_spline(participant_data['age'], participant_data['avg_intensity'], k=2)
+            spline = make_interp_spline(participant_data['age'], participant_data[value_column], k=2)
             intensity_smooth = spline(age_smooth)
 
             # Use the alternate color map for the participant
@@ -782,7 +980,7 @@ def create_rainbow_plot(csv_file_path):
             ax.plot(age_smooth, intensity_smooth, color=color, alpha=0.7, label=f'P{j + 1}')
             
             # Plot the original average intensity points
-            ax.scatter(participant_data['age'], participant_data['avg_intensity'], color=color, edgecolor='black', zorder=5)
+            ax.scatter(participant_data['age'], participant_data[value_column], color=color, edgecolor='black', zorder=5)
 
         # Add a legend with participant numbers (P1, P2, P3, ...)
         ax.legend(title='Participants', loc='upper right')
@@ -790,7 +988,7 @@ def create_rainbow_plot(csv_file_path):
         # Customize each subplot
         ax.set_title(f'Participants {i * 6 + 1} to {i * 6 + len(group)}', fontsize=12)
         ax.set_xlabel('Age', fontsize=10)
-        ax.set_ylabel('Average Intensity', fontsize=10)
+        ax.set_ylabel(y_title, fontsize=10)
         ax.grid(True)
 
     # Adjust layout and show the plot
@@ -813,19 +1011,17 @@ def load_and_preprocess_data():
     # return dataset
 
 if __name__ == "__main__":
-    load_and_preprocess_data()
+    # load_and_preprocess_data()
     # input_csv = './data/CP/trios_sorted_by_age.csv'  # Path to your input CSV
+    input_csv = '/home/andjela/Documents/CP/trios_sorted_by_age.csv'
+    # save_transform_paths_CP(input_csv)
+
+    # input_csv = '/home/andjela/Documents/CP/trios_sorted_by_age_with_transforms.csv'
+    # rel_path = '/home/andjela/joplin-intra-inter/CP_rigid_trios'
+    # process_csv_and_calculate_scaling_factors(input_csv, rel_path)
+    # create_rainbow_plot(input_csv, 'scaling_avg', 'Scaling Avg')
 
     # process_csv_and_calculate_averages(input_csv)
-    # create_rainbow_plot(input_csv)
-    # transform_path = '/home/andjela/Documents/longitudinal-pediatric-completion/data/CP/sub-001/trio-001/mov2fix_PS14_001_PS14_053Composite.h5'
-    # # Step 1: Extract the affine matrix from the h5 file
-    # affine_matrix, translation_vector = read_ANTs_transform(transform_path)
-
-    # # Step 2: Extract scaling and shearing from the affine matrix
-    # scaling, shearing = extract_scaling_and_shearing(affine_matrix)
-
-    # print("Scaling:", scaling)
-    # print("Shearing:", shearing)
-    # print("Translation:", translation_vector)
+    create_rainbow_plot(input_csv, 'avg_intensity', 'Average Intensity')
+    
    
