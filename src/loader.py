@@ -701,7 +701,7 @@ def preprocess_CP(trios_df):
 
             print('Done with trio:', trio.iloc[1]["trio_id"])
 
-def preprocess_affine_CP(trios_df, transfo_type):
+def preprocess_affine_CP(trios_df, rel_path, transfo_type):
     # transfo_type = affine or rigid_affine
     # Rigid reg to middle time point
     processed_pairs = set()
@@ -713,7 +713,8 @@ def preprocess_affine_CP(trios_df, transfo_type):
         trios = [group.iloc[i:i+3] for i in range(0, len(group), 3)]
         
         for trio in trios:
-            save_path = f'./data/CP/{sub_id}/{trio.iloc[1]["trio_id"]}'
+            # save_path = f'./data/CP/{sub_id}/{trio.iloc[1]["trio_id"]}'
+            save_path = f'{rel_path}/{sub_id}/{trio.iloc[1]["trio_id"]}'
             # Extract the paths for the trio
             if transfo_type == 'affine':
                 path_1 = trio.iloc[0]['path']
@@ -991,7 +992,7 @@ def load_and_preprocess_data():
     # trios_data = pd.read_csv(abbey_path)
     # trios_data = pd.read_csv('/home/andjela/Documents/CP/trios_sorted_by_age.csv')
 
-    preprocess_affine_CP(trios_data, 'rigid_affine')
+    preprocess_affine_CP(trios_data, abbey_path, 'rigid_affine')
     
     # # Create a tf.data.Dataset
     # dataset = tf.data.Dataset.from_tensor_slices(data)
