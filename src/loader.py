@@ -477,8 +477,6 @@ def preprocess_BCP(filename, path):
 
 # Function to perform rigid registration
 def perform_registration(mov_path, fix_path, scan_id_mov, scan_id_fix, save_path):
-    # Placeholder for actual registration code
-    # e.g., using an image processing library like SimpleITK or ANTs
     print(f"Registering {os.path.basename(mov_path)} to {os.path.basename(fix_path)}")
     os.system(f"antsRegistration --dimensionality 3 --float 0 " \
             f"--output [ {save_path}/mov2fix_{scan_id_mov}_{scan_id_fix}, {save_path}/{scan_id_mov}.nii.gz] " \
@@ -495,15 +493,14 @@ def perform_registration(mov_path, fix_path, scan_id_mov, scan_id_fix, save_path
             )
     
 # Function to perform affine registration
-def perform_affine_registration(mov_path, fix_path, scan_id_mov, scan_id_fix, save_path):
-    # Placeholder for actual registration code
-    # e.g., using an image processing library like SimpleITK or ANTs
+def perform_affine_registration(mov_path, fix_path, scan_id_mov, scan_id_fix, transfo_type, save_path):
+    # Can perform rigid + affine by giving as input the rigid pre-registred images
     print(f"Registering {os.path.basename(mov_path)} to {os.path.basename(fix_path)}")
     os.system(f"antsRegistration --float 0 --collapse-output-transforms 1 --dimensionality 3 " \
             f"--initial-moving-transform [ {fix_path}, {mov_path}, 1 ] " \
             f"--initialize-transforms-per-stage 0 " \
             f"--interpolation Linear " \
-            f"--output [ {save_path}/affine_mov2fix_{scan_id_mov}_{scan_id_fix}, {save_path}/{scan_id_mov}_affine.nii.gz ] " \
+            f"--output [ {save_path}/{transfo_type}_mov2fix_{scan_id_mov}_{scan_id_fix}, {save_path}/{scan_id_mov}_{transfo_type}.nii.gz ] " \
             f"--transform Affine[ 0.1 ] " \
             f"--metric Mattes[ {fix_path}, {mov_path}, 1, 32, Regular, 0.3 ] " \
             f"--convergence [ 500x250x100, 1e-6, 10 ] " \
@@ -550,10 +547,7 @@ def skull_strip(image_path, scan_id):
           f'{os.path.dirname(image_path)}/{scan_id}_skull.nii.gz -f 0.3 -g 0')
     print(f"Skull-stripped {os.path.basename(image_path)}")
     
-def create_df_CP(filename, path, work_dir_rel_path):
-    
-    # Correct way to read the TSV data into a pandas DataFrame
-    df = pd.read_csv(f'{path}/{filename}', sep='\t')
+def create_df_CP(df, work_dir_rel_path, save_path):
 
     # Add a new column 'n4_path' with the specified path format
     df['n4_path'] = df.apply(lambda row: f'{work_dir_rel_path}/work_dir/reg_n4_wdir/{row.participant_id}/{row.scan_id}/wf/n4/{row.scan_id}_corrected.nii.gz', axis=1)
@@ -631,11 +625,11 @@ def create_df_CP(filename, path, work_dir_rel_path):
     trios_df = pd.DataFrame(new_rows, columns=list(data_T1w_long_subjects.columns) + ['trio_id', 'path'])
 
     # Save the new DataFrame to a CSV file
-    trios_df.to_csv("./data/CP/trios_sorted_by_age.csv", index=False)
+    trios_df.to_csv(save_path, index=False)
 
-    return df, trios_df
+    return trios_df
 
-def preprocess_CP(df, trios_df):
+def preprocess_CP(trios_df):
     # # Skull-strip each N4 corrected scan with 2 times bet command
     # start_time = time.time()
     # # Only to be done on participants which have multiple time points
@@ -707,22 +701,8 @@ def preprocess_CP(df, trios_df):
 
             print('Done with trio:', trio.iloc[1]["trio_id"])
 
-def preprocess_affine_CP(df, trios_df):
-    # # Skull-strip each N4 corrected scan with 2 times bet command
-    # start_time = time.time()
-    # # Only to be done on participants which have multiple time points
-    # for index, row in df.iterrows():
-    #     if row['scan_id'] in trios_df['scan_id'].values:
-    #         print(f'Scan nbr: {index}')
-    #         skull_strip(row.n4_path, row.scan_id)
-    # end_time = time.time()
-
-    # # Calculate the duration
-    # duration = end_time - start_time
-
-    # # Print the time taken
-    # print(f"Time taken for skull stripping: {duration} seconds")
-    
+def preprocess_affine_CP(trios_df, transfo_type):
+    # transfo_type = affine or rigid_affine
     # Rigid reg to middle time point
     processed_pairs = set()
     # Dictionary to store previous paths for already registered pairs
@@ -733,51 +713,49 @@ def preprocess_affine_CP(df, trios_df):
         trios = [group.iloc[i:i+3] for i in range(0, len(group), 3)]
         
         for trio in trios:
+            save_path = f'./data/CP/{sub_id}/{trio.iloc[1]["trio_id"]}'
             # Extract the paths for the trio
-            path_1 = trio.iloc[0]['path']
-            path_2 = trio.iloc[1]['path']  # This is the reference
-            path_3 = trio.iloc[2]['path']
-
-            # Create a directory to save the preprocessed images if it doesn't exist
-            save_path = f'./data/CP/{sub_id}/{trio.iloc[1]["trio_id"]}/'
-            if not os.path.exists(save_path):
-                os.makedirs(save_path)
+            if transfo_type == 'affine':
+                path_1 = trio.iloc[0]['path']
+                path_2 = trio.iloc[1]['path']  # This is the reference
+                path_3 = trio.iloc[2]['path']
+            # If rigid_affine transfo
+            else:
+                path_1 = f'{save_path}/{trio.iloc[0]["scan_id"]}.nii.gz'
+                path_2 = f'{save_path}/{trio.iloc[1]["scan_id"]}.nii.gz'  # This is the reference
+                path_3 = f'{save_path}/{trio.iloc[2]["scan_id"]}.nii.gz'
 
             # Create a tuple to represent the scan pair (scan_1 -> scan_2)
             pair_1_to_2 = (trio.iloc[0]['scan_id'], trio.iloc[1]['scan_id'])
             pair_3_to_2 = (trio.iloc[2]['scan_id'], trio.iloc[1]['scan_id'])
 
-            # Save scan_2 in dedicated space (./data/CP/sub_id_bids/trio_id/) if not already there
-            if not os.path.exists(f'{save_path}/{os.path.basename(path_2)}'):
-                shutil.copy(path_2, f'{save_path}/{trio.iloc[1]["scan_id"]}.nii.gz')
-
             # If pair_1_to_2 has been processed, copy the previous scan_1 to the current trio directory
             if pair_1_to_2 not in saved_paths_for_pairs:
                 # If the pair has not been processed, perform registration and save the path
-                perform_affine_registration(path_1, path_2, trio.iloc[0]['scan_id'], trio.iloc[1]['scan_id'], save_path)
+                perform_affine_registration(path_1, path_2, trio.iloc[0]['scan_id'], trio.iloc[1]['scan_id'], transfo_type, save_path)
                 # Save the path where scan_1 is saved
-                saved_paths_for_pairs[pair_1_to_2] = f'{save_path}/{trio.iloc[0]["scan_id"]}.nii.gz'
+                saved_paths_for_pairs[pair_1_to_2] = f'{save_path}/{trio.iloc[0]["scan_id"]}_{transfo_type}.nii.gz'
                 # Add the pair to the processed set
                 processed_pairs.add(pair_1_to_2)
             else:
                 previous_scan_1_path = saved_paths_for_pairs[pair_1_to_2]
-                shutil.copy(previous_scan_1_path, f'{save_path}/{trio.iloc[0]["scan_id"]}.nii.gz')
+                shutil.copy(previous_scan_1_path, f'{save_path}/{trio.iloc[0]["scan_id"]}_{transfo_type}.nii.gz')
 
             # Perform registration for scan_3 -> scan_2 if it hasn't been processed yet
             if pair_3_to_2 not in processed_pairs:
-                perform_affine_registration(path_3, path_2, trio.iloc[2]['scan_id'], trio.iloc[1]['scan_id'], save_path)
+                perform_affine_registration(path_3, path_2, trio.iloc[2]['scan_id'], trio.iloc[1]['scan_id'], transfo_type, save_path)
                 # Save the path where scan_3 is saved
-                saved_paths_for_pairs[pair_3_to_2] = f'{save_path}/{trio.iloc[2]["scan_id"]}.nii.gz'
+                saved_paths_for_pairs[pair_3_to_2] = f'{save_path}/{trio.iloc[2]["scan_id"]}_{transfo_type}.nii.gz'
                 # Add the pair to the processed set
                 processed_pairs.add(pair_3_to_2)
             else:
                 # Copy the already registered scan_3 from previous trio to the current trio directory
                 previous_scan_3_path = saved_paths_for_pairs[pair_3_to_2]
-                shutil.copy(previous_scan_3_path, f'{save_path}/{trio.iloc[2]["scan_id"]}.nii.gz')
+                shutil.copy(previous_scan_3_path, f'{save_path}/{trio.iloc[2]["scan_id"]}_{transfo_type}.nii.gz')
 
             print('Done with trio:', trio.iloc[1]["trio_id"])
 
-def save_transform_paths_CP(csv_file_path):
+def save_transform_paths_CP(csv_file_path, transfo_type):
     """
     Processes scan pairs from the input CSV, stores paths to transformation files for each pair,
     and updates the CSV with the transformation paths on the first and last lines of each trio.
@@ -809,8 +787,8 @@ def save_transform_paths_CP(csv_file_path):
             pair_3_to_2 = (trio.iloc[2]['scan_id'], trio.iloc[1]['scan_id'])
 
             # Define paths for the transformation files
-            transform_1_to_2 = f'./data/CP/{sub_id}/{trio_id}/mov2fix_{pair_1_to_2[0]}_{pair_1_to_2[1]}Composite.h5'
-            transform_3_to_2 = f'./data/CP/{sub_id}/{trio_id}/mov2fix_{pair_3_to_2[0]}_{pair_3_to_2[1]}Composite.h5'
+            transform_1_to_2 = f'./data/CP/{sub_id}/{trio_id}/{transfo_type}_mov2fix_{pair_1_to_2[0]}_{pair_1_to_2[1]}Composite.h5'
+            transform_3_to_2 = f'./data/CP/{sub_id}/{trio_id}/{transfo_type}_mov2fix_{pair_3_to_2[0]}_{pair_3_to_2[1]}Composite.h5'
 
             ### Handle pair_1_to_2 (scan_1 -> scan_2)
             if pair_1_to_2 not in saved_paths_for_pairs:
@@ -1000,10 +978,20 @@ def load_and_preprocess_data():
     # Preprocess the data
     filename = 'all-participants.tsv'
     path = './data/CP'
-    work_dir_rel_path = '/home/GRAMES.POLYMTL.CA/andim/intra-inter-ddfs'
-    # work_dir_rel_path = '/home/andjela/joplin-intra-inter'
-    ind_df, trios_data = create_df_CP(filename, path, work_dir_rel_path)
-    preprocess_CP(ind_df, trios_data)
+    # Correct way to read the TSV data into a pandas DataFrame
+    df = pd.read_csv(f'{path}/{filename}', sep='\t')
+    # # joplin_path = '/home/GRAMES.POLYMTL.CA/andim/intra-inter-ddfs'
+    # andjela_path = '/home/andjela/joplin-intra-inter'
+    abbey_path = '/home/GRAMES.POLYMTL.CA/andim/joplin-intra-inter/CP_rigid_trios/CP'
+    save_path = "./data/CP/trios_sorted_by_age.csv"
+    trios_data = create_df_CP(df, abbey_path, save_path)
+    # preprocess_CP(trios_data)
+
+    # # # Preprocess the data with affine registration
+    # trios_data = pd.read_csv(abbey_path)
+    # trios_data = pd.read_csv('/home/andjela/Documents/CP/trios_sorted_by_age.csv')
+
+    preprocess_affine_CP(trios_data, 'rigid_affine')
     
     # # Create a tf.data.Dataset
     # dataset = tf.data.Dataset.from_tensor_slices(data)
@@ -1011,10 +999,11 @@ def load_and_preprocess_data():
     # return dataset
 
 if __name__ == "__main__":
-    # load_and_preprocess_data()
+    load_and_preprocess_data()
     # input_csv = './data/CP/trios_sorted_by_age.csv'  # Path to your input CSV
-    input_csv = '/home/andjela/Documents/CP/trios_sorted_by_age.csv'
-    # save_transform_paths_CP(input_csv)
+    # input_csv = '/home/andjela/Documents/CP/trios_sorted_by_age.csv'
+    # transfo_type = 'rigid_affine'
+    # save_transform_paths_CP(input_csv, transfo_type)
 
     # input_csv = '/home/andjela/Documents/CP/trios_sorted_by_age_with_transforms.csv'
     # rel_path = '/home/andjela/joplin-intra-inter/CP_rigid_trios'
@@ -1022,6 +1011,6 @@ if __name__ == "__main__":
     # create_rainbow_plot(input_csv, 'scaling_avg', 'Scaling Avg')
 
     # process_csv_and_calculate_averages(input_csv)
-    create_rainbow_plot(input_csv, 'avg_intensity', 'Average Intensity')
+    # create_rainbow_plot(input_csv, 'avg_intensity', 'Average Intensity')
     
    
