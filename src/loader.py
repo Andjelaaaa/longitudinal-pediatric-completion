@@ -242,7 +242,7 @@ def extract_scaling_and_shearing(affine_matrix):
 
     return scaling_factors, shear_factors
 
-def process_csv_and_calculate_scaling_factors(csv_file_path, rel_path):
+def process_csv_and_calculate_scaling_factors(csv_file_path):
     """
     Processes the CSV file, calculates the scaling factors for each transform file,
     and stores the result in new columns for scaling factors.
@@ -266,12 +266,12 @@ def process_csv_and_calculate_scaling_factors(csv_file_path, rel_path):
             df.at[idx, 'scaling_avg'] = 1.0
             continue
         
-        print(transform_path)
-        rel_transform_path = f"{rel_path}/{transform_path[6:]}"  # Path to the ANTs transform file
+        # print(transform_path)
+        # rel_transform_path = f"{rel_path}/{transform_path[6:]}"  # Path to the ANTs transform file
 
         try:
             # Read the affine matrix from the ANTs transform
-            affine_matrix, _ = read_ANTs_transform(rel_transform_path)
+            affine_matrix, _ = read_ANTs_transform(transform_path)
             
             # Extract scaling factors
             scaling_factors, _ = extract_scaling_and_shearing(affine_matrix)
@@ -756,7 +756,7 @@ def preprocess_affine_CP(trios_df, rel_path, transfo_type):
 
             print('Done with trio:', trio.iloc[1]["trio_id"])
 
-def save_transform_paths_CP(csv_file_path, transfo_type):
+def save_transform_paths_CP(csv_file_path, rel_path, transfo_type):
     """
     Processes scan pairs from the input CSV, stores paths to transformation files for each pair,
     and updates the CSV with the transformation paths on the first and last lines of each trio.
@@ -788,8 +788,8 @@ def save_transform_paths_CP(csv_file_path, transfo_type):
             pair_3_to_2 = (trio.iloc[2]['scan_id'], trio.iloc[1]['scan_id'])
 
             # Define paths for the transformation files
-            transform_1_to_2 = f'./data/CP/{sub_id}/{trio_id}/{transfo_type}_mov2fix_{pair_1_to_2[0]}_{pair_1_to_2[1]}Composite.h5'
-            transform_3_to_2 = f'./data/CP/{sub_id}/{trio_id}/{transfo_type}_mov2fix_{pair_3_to_2[0]}_{pair_3_to_2[1]}Composite.h5'
+            transform_1_to_2 = f'{rel_path}/{sub_id}/{trio_id}/{transfo_type}_mov2fix_{pair_1_to_2[0]}_{pair_1_to_2[1]}Composite.h5'
+            transform_3_to_2 = f'{rel_path}/{sub_id}/{trio_id}/{transfo_type}_mov2fix_{pair_3_to_2[0]}_{pair_3_to_2[1]}Composite.h5'
 
             ### Handle pair_1_to_2 (scan_1 -> scan_2)
             if pair_1_to_2 not in saved_paths_for_pairs:
@@ -1000,15 +1000,16 @@ def load_and_preprocess_data():
     # return dataset
 
 if __name__ == "__main__":
-    load_and_preprocess_data()
-    # input_csv = './data/CP/trios_sorted_by_age.csv'  # Path to your input CSV
+    # load_and_preprocess_data()
+    input_csv = './data/CP/trios_sorted_by_age.csv'  # Path to your input CSV
     # input_csv = '/home/andjela/Documents/CP/trios_sorted_by_age.csv'
-    # transfo_type = 'rigid_affine'
-    # save_transform_paths_CP(input_csv, transfo_type)
+    transfo_type = 'rigid_affine'
+    abbey_path = '/home/GRAMES.POLYMTL.CA/andim/joplin-intra-inter/CP_rigid_trios/CP'
+    save_transform_paths_CP(input_csv, abbey_path, transfo_type)
 
     # input_csv = '/home/andjela/Documents/CP/trios_sorted_by_age_with_transforms.csv'
     # rel_path = '/home/andjela/joplin-intra-inter/CP_rigid_trios'
-    # process_csv_and_calculate_scaling_factors(input_csv, rel_path)
+    process_csv_and_calculate_scaling_factors('./data/CP/trios_sorted_by_age_with_transforms.csv')
     # create_rainbow_plot(input_csv, 'scaling_avg', 'Scaling Avg')
 
     # process_csv_and_calculate_averages(input_csv)
