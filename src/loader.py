@@ -1,4 +1,5 @@
 import os
+import re
 import numpy as np
 import h5py
 import pandas as pd
@@ -24,7 +25,7 @@ import torchio as tio
 from torchio import transforms as tio_transforms
 
 class CP(Dataset):
-    def __init__(self, root_dir, age_csv, opt=None):
+    def __init__(self, root_dir, age_csv, transfo_type):
         """
         Args:
             root_dir (string): Directory with all the trios of images (nii.gz).
@@ -37,7 +38,9 @@ class CP(Dataset):
         self.age_info = pd.read_csv(age_csv)
 
         # Filter the CSV file to include only the trios marked for training
-        self.train_info = self.age_info[self.age_info["traintest"] == "train"].head(144)
+        self.train_info = self.age_info[self.age_info["traintest"] == "train"]
+
+        self.transfo_type = transfo_type
 
         # Set image dimensions for resizing (if needed)
         # if opt is None or 'image_size' not in opt:
@@ -60,7 +63,7 @@ class CP(Dataset):
         # Collect all available trios marked as "train"
         self.trio_paths = self.get_trio_paths()
 
-    def get_trio_paths(self):
+    def get_trio_paths(self, transfo_type):
         """
         Collects the paths to all trios that are marked for training in the CSV file.
         """
@@ -71,7 +74,14 @@ class CP(Dataset):
             trio_dir = os.path.join(self.root_dir, f"{subject_id}", f"{trio_id}")
 
             # Each subject might have multiple trios, check for .nii.gz files in the directory
-            nii_files = sorted([f for f in os.listdir(trio_dir) if f.endswith(".nii.gz")])
+            if transfo_type == 'rigid_affine':
+                nii_files = sorted([f for f in os.listdir(trio_dir) if f.endswith(f"{transfo_type}.nii.gz")])
+            else:
+                # Regular expression to match files that end with a digit followed by .nii.gz
+                nii_files = sorted([
+                    f for f in os.listdir(trio_dir) 
+                    if re.search(r'\d+\.nii\.gz$', f)
+                ])
 
             # Ensure we have sets of 3 files (preceding, target, subsequent)
             for i in range(0, len(nii_files) - 2, 3):
@@ -112,7 +122,7 @@ class CP(Dataset):
         """
         Get the age of the target image from the CSV file.
         """
-        age_row = self.train_info[self.train_info["scan_id"] == target_image_name].head(144)
+        age_row = self.train_info[self.train_info["scan_id"] == target_image_name]
         if age_row.empty:
             raise ValueError(f"Age information not found for image: {target_image_name}")
 
@@ -705,9 +715,9 @@ if __name__ == "__main__":
 
     # input_csv = '/home/andjela/Documents/CP/trios_sorted_by_age_with_transforms.csv'
     # rel_path = '/home/andjela/joplin-intra-inter/CP_rigid_trios'
-    process_csv_and_calculate_scaling_factors('./data/CP/trios_sorted_by_age_with_transforms.csv')
+    # process_csv_and_calculate_scaling_factors('./data/CP/trios_sorted_by_age_with_transforms.csv')
     input_csv = 'C:\\Users\\andje\\Downloads\\trios_sorted_by_age_with_transforms.csv'
-    create_rainbow_plot(input_csv, 'scaling_avg', 'Scaling Avg')
+    # create_rainbow_plot(input_csv, 'scaling_avg', 'Scaling Avg')
 
     # process_csv_and_calculate_averages(input_csv)
     # create_rainbow_plot(input_csv, 'avg_intensity', 'Average Intensity')

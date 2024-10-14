@@ -322,8 +322,9 @@ def create_rainbow_plot(input_csv, value_column, y_title):
 def analyze_mean_scaling_factors(input_csv):
     df = pd.read_csv(input_csv)
     # Select the 1st and 3rd rows in each trio (for groups of 3)
-    first_in_trio = df.groupby('sub_id_bids').nth(0)['scaling_avg']
-    third_in_trio = df.groupby('sub_id_bids').nth(2)['scaling_avg']
+    first_in_trio = df.groupby('trio_id').nth(0)['scaling_avg']
+    third_in_trio = df.groupby('trio_id').nth(2)['scaling_avg']
+    print(first_in_trio.shape)
     
     # Calculate mean of scaling_avg
     mean_scaling_avg_scan_1_2 = first_in_trio.mean()
@@ -343,10 +344,17 @@ def analyze_mean_scaling_factors(input_csv):
     
     # Find which trios have False in shrinkage_bool and return their details
     false_shrinkage_indices = [i for i, val in enumerate(shrinkage_bool) if not val]
-    false_shrinkage_trios = df.groupby('sub_id_bids').nth(2).iloc[false_shrinkage_indices]
+    false_shrinkage_trios = df.groupby('trio_id').nth(2).iloc[false_shrinkage_indices]
     
     print('Trios with False in shrinkage_bool:')
     print(false_shrinkage_trios)
+
+    # Find which trios have False in expansion_bool and return their details
+    false_expansion_indices = [i for i, val in enumerate(shrinkage_bool) if not val]
+    false_expansion_trios = df.groupby('trio_id').nth(2).iloc[false_expansion_indices]
+    
+    print('Trios with False in expansion_bool:')
+    print(false_expansion_trios)
 
 if __name__ == "__main__":
     # input_csv = '/home/andjela/Documents/CP/trios_sorted_by_age.csv'
