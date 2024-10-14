@@ -61,7 +61,7 @@ class CP(Dataset):
         # self.resize_transform = tio.Resize(self.img_size) if opt and 'image_size' in opt else None
 
         # Collect all available trios marked as "train"
-        self.trio_paths = self.get_trio_paths()
+        self.trio_paths = self.get_trio_paths(transfo_type)
 
     def get_trio_paths(self, transfo_type):
         """
