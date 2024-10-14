@@ -6,7 +6,9 @@ from model import DenoisingNetwork
 
 def main():
     # Load the CP dataset
-    train_dataset = CP(root_dir='./data/CP/', age_csv='./data/CP/trios_sorted_by_age.csv')
+    # train_dataset = CP(root_dir='./data/CP/', age_csv='./data/CP/trios_sorted_by_age.csv')
+    romane_dir = '/home/GRAMES.POLYMTL.CA/andim/joplin-intra-inter/CP_rigid_trios/CP'
+    train_dataset = CP(root_dir=romane_dir, age_csv=f'{romane_dir}/trios_sorted_by_age.csv')
     train_loader = DataLoader(train_dataset, batch_size=2, shuffle=True)
 
     # Define the model
