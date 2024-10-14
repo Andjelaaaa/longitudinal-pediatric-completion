@@ -25,7 +25,7 @@ import torchio as tio
 from torchio import transforms as tio_transforms
 
 class CP(Dataset):
-    def __init__(self, root_dir, age_csv, transfo_type):
+    def __init__(self, root_dir, age_csv, transfo_type, opt=None):
         """
         Args:
             root_dir (string): Directory with all the trios of images (nii.gz).
