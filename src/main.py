@@ -26,6 +26,10 @@ def main(use_accelerator=False):
     else:
         model.to(device)
 
+    # Verify that all parameters are on the correct devices
+    for name, param in model.named_parameters():
+        print(f"{name} is on {param.device}")
+
     # Noise schedule
     noise_schedule = torch.linspace(1e-4, 5e-3, 1000, dtype=torch.float32).to(device)
 
