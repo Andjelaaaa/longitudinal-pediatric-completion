@@ -25,7 +25,7 @@ def main(use_accelerator, use_data_parallel):
     device = accelerator.device if accelerator else torch.device("cuda" if torch.cuda.is_available() else "cpu")
     romane_dir = '/home/GRAMES.POLYMTL.CA/andim/joplin-intra-inter/CP_rigid_trios/CP'
     train_dataset = CP(root_dir=romane_dir, age_csv=f'{romane_dir}/trios_sorted_by_age.csv', transfo_type='rigid')
-    train_loader = DataLoader(train_dataset, batch_size=2, shuffle=True, pin_memory=True, num_workers=4)
+    train_loader = DataLoader(train_dataset, batch_size=1, shuffle=True, pin_memory=True, num_workers=4)
 
     # Monitor memory before data loading
     print(f"Memory allocated before loading data: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
