@@ -1,12 +1,16 @@
 import torch
 from torch.utils.data import DataLoader
+from accelerate import Accelerator
 from training import train_model
 from loader import CP  # Custom dataset class
 from model import DenoisingNetwork, DenoisingNetworkParallel  # Import both versions
 
 def main(use_accelerator=False):
-    # Check if CUDA is available and set the device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # Initialize the accelerator
+    accelerator = Accelerator() if use_accelerator else None
+
+    # Determine the device from accelerator or use default CUDA/CPU fallback
+    device = accelerator.device if use_accelerator else torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load the CP dataset
     romane_dir = '/home/GRAMES.POLYMTL.CA/andim/joplin-intra-inter/CP_rigid_trios/CP'
@@ -23,17 +27,28 @@ def main(use_accelerator=False):
         print("Using standard DenoisingNetwork")
         model = DenoisingNetwork(input_shape=(1, 256, 256, 105), filters=64, age_embedding_dim=128)
 
-    # Move model to the appropriate device
-    model.to(device)
+    # Prepare model and data for distributed training if accelerator is enabled
+    if use_accelerator:
+        # Prepare model and dataloader with the accelerator
+        model, train_loader = accelerator.prepare(model, train_loader)
+    else:
+        # Move model to the appropriate device
+        model.to(device)
 
     # Define the noise schedule with float32 dtype
     noise_schedule = torch.linspace(1e-4, 5e-3, 1000, dtype=torch.float32).to(device)
 
-    # Train the model
-    train_model(model, train_loader, noise_schedule, epochs=10, lambda_fusion=0.6)
+    # Train the model using the accelerator if enabled
+    train_model(model, train_loader, noise_schedule, epochs=10, lambda_fusion=0.6, accelerator=accelerator)
 
-    # Save the trained model
-    torch.save(model.state_dict(), "checkpoints/model.pth")
+    # Save the trained model state only on the main process when using the accelerator
+    if not use_accelerator or accelerator.is_main_process:
+        torch.save(model.state_dict(), "checkpoints/model.pth")
+
+if __name__ == "__main__":
+    # Set use_accelerator to True to run with multi-GPU support
+    main(use_accelerator=True)
+
 
 if __name__ == "__main__":
     # Run without accelerator by default

@@ -187,39 +187,35 @@ class DenoisingNetworkParallel(nn.Module):
         self.final_conv = nn.Conv3d(in_channels=filters, out_channels=1, kernel_size=3, padding=1).to('cuda:2')
 
     def forward(self, p, t, s, age):
-        # Move inputs to GPU 0
+        # Ensure inputs are on GPU 0
         p, t, s, age = p.to('cuda:0'), t.to('cuda:0'), s.to('cuda:0'), age.to('cuda:0')
 
-        # Age embedding and downsampling
+        # Stage 1: Age embedding and downsampling on GPU 0
         age_emb = self.age_embedding(age)
         p_features = self.downsample(self.res_block(p))
         t_features = self.downsample(self.res_block(t))
         s_features = self.downsample(self.res_block(s))
 
-        # Reshape and move features to GPU 1 for self-attention and fusion
-        p_features = p_features.flatten(start_dim=2).permute(0, 2, 1).to('cuda:1')  # (batch_size, num_pixels, filters)
-        s_features = s_features.flatten(start_dim=2).permute(0, 2, 1).to('cuda:1')
-
-        # Apply Self-Attention
-        p_features = self.self_attention(p_features)
-        s_features = self.self_attention(s_features)
-
-        # LoCI Fusion
+        # Move to GPU 1 for self-attention and LoCI fusion
+        p_features, s_features = p_features.to('cuda:1'), s_features.to('cuda:1')
+        p_features = self.self_attention(p_features.flatten(2).permute(0, 2, 1))  # [B, N, D]
+        s_features = self.self_attention(s_features.flatten(2).permute(0, 2, 1))
         fused_p, fused_s = self.loci_fusion(p_features, s_features)
 
         # Move to GPU 2 for GAM and reconstruction
         fused_p, fused_s = fused_p.to('cuda:2'), fused_s.to('cuda:2')
-        t_features = t_features.flatten(start_dim=2).permute(0, 2, 1).to('cuda:2')
+        t_features = t_features.flatten(2).permute(0, 2, 1).to('cuda:2')
 
-        # Use GAM to fuse with age information
+        # Apply GAM
         fusion_condition = fused_p + fused_s + t_features
         gam_output = self.gam(fusion_condition)
 
-        # Upsample and reshape the output back to 3D
-        reconstructed = self.upsample(gam_output.permute(0, 2, 1).view(*p.size()))  # Reshape to original shape
+        # Reshape and reconstruct the output on GPU 2
+        reconstructed = self.upsample(gam_output.permute(0, 2, 1).view(*p.size()))  # Restore original shape
         output = self.final_conv(reconstructed)
 
         return output
+
 
 
 # # Example usage
