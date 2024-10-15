@@ -37,7 +37,7 @@ def main(use_accelerator=False):
 
 if __name__ == "__main__":
     # Run without accelerator by default
-    main(use_accelerator=False)
+    main(use_accelerator=True)
 
 
 
