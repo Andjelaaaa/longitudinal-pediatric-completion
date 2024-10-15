@@ -18,7 +18,7 @@ def total_loss(eps, predicted_eps, c_pred_p, c_pred_s, lambda_fusion=0.6):
     return l_diff + lambda_fusion * l_fusion
 
 # Training step function with Accelerator support
-def train_step(model, optimizer, inputs, noise_schedule, lambda_fusion, accelerator):
+def train_step(model, optimizer, inputs, noise_schedule, lambda_fusion, accelerator=None):
     """
     Perform a single training step:
     1. Forward pass
@@ -28,27 +28,42 @@ def train_step(model, optimizer, inputs, noise_schedule, lambda_fusion, accelera
     """
     model.train()  # Ensure training mode
 
-    # Move inputs to the appropriate device using accelerator
-    p, t, s, age = [x.to(accelerator.device) for x in inputs]
+    # Determine the device (use accelerator if available, otherwise fallback to CPU/GPU)
+    device = accelerator.device if accelerator else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    # Move inputs to the selected device
+    p, t, s, age = [x.to(device) for x in inputs]
 
     # Generate random noise level
     noise_level = torch.rand(1).item() * (noise_schedule[-1] - noise_schedule[0]) + noise_schedule[0]
-    noisy_t = t + noise_level * torch.randn_like(t).to(t.device)
-    eps = torch.randn_like(t).to(t.device)
+    noisy_t = t + noise_level * torch.randn_like(t).to(device)
+    eps = torch.randn_like(t).to(device)
 
     # Zero out gradients
     optimizer.zero_grad()
 
-    # Forward pass with autocast for mixed precision
-    with accelerator.autocast():
+    # Forward pass with autocast for mixed precision (only if accelerator is used)
+    if accelerator:
+        with accelerator.autocast():
+            predicted_eps, loci_outputs_p, loci_outputs_s = model(p, noisy_t, s, age)
+            predicted_eps = predicted_eps - noisy_t  # Adjust predicted noise
+
+            # Compute total loss
+            loss = total_loss(eps, predicted_eps, loci_outputs_p, loci_outputs_s, lambda_fusion)
+
+        # Backward pass and optimization step
+        accelerator.backward(loss)
+    else:
+        # Standard forward pass if no accelerator is available
         predicted_eps, loci_outputs_p, loci_outputs_s = model(p, noisy_t, s, age)
         predicted_eps = predicted_eps - noisy_t  # Adjust predicted noise
 
         # Compute total loss
         loss = total_loss(eps, predicted_eps, loci_outputs_p, loci_outputs_s, lambda_fusion)
 
-    # Backward pass and optimization step
-    accelerator.backward(loss)
+        # Backward pass and optimization step
+        loss.backward()
+
     optimizer.step()
 
     return loss
