@@ -8,7 +8,7 @@ from accelerate import Accelerator
 
 def main(use_accelerator=False):
     # Initialize accelerator if used
-    accelerator = Accelerator() if use_accelerator else None
+    accelerator = Accelerator(mixed_precision="fp16") if use_accelerator else None
 
     # Set device and load data
     device = accelerator.device if accelerator else torch.device("cuda" if torch.cuda.is_available() else "cpu")
