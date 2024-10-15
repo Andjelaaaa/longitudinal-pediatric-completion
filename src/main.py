@@ -25,7 +25,12 @@ def main(use_accelerator, use_data_parallel):
     device = accelerator.device if accelerator else torch.device("cuda" if torch.cuda.is_available() else "cpu")
     romane_dir = '/home/GRAMES.POLYMTL.CA/andim/joplin-intra-inter/CP_rigid_trios/CP'
     train_dataset = CP(root_dir=romane_dir, age_csv=f'{romane_dir}/trios_sorted_by_age.csv', transfo_type='rigid')
-    train_loader = DataLoader(train_dataset, batch_size=2, shuffle=True)
+    train_loader = DataLoader(train_dataset, batch_size=2, shuffle=True, pin_memory=True, num_workers=4)
+
+    # Monitor memory before data loading
+    print(f"Memory allocated before loading data: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
+    inputs = next(iter(train_loader))  # Load a batch of data
+    print(f"Memory allocated after loading data: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
 
     # Select model
     model = DenoisingNetworkParallel(input_shape=(1, 256, 256, 105), filters=64, age_embedding_dim=128) \
@@ -40,6 +45,15 @@ def main(use_accelerator, use_data_parallel):
     elif use_data_parallel:
         model = torch.nn.DataParallel(model, device_ids=[0, 1, 2])
     model.to(device)
+
+    # Check memory after model creation
+    print(f"Memory allocated after model creation: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
+
+    # Perform a forward pass and monitor memory
+    model.eval()  # Set model to evaluation mode
+    with torch.no_grad():
+        outputs = model(*inputs)  # Forward pass
+    print(f"Memory allocated after forward pass: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
 
     # Count number of parameters in the model
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
