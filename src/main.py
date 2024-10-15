@@ -24,7 +24,7 @@ def main(use_accelerator, use_data_parallel):
     # Use DataParallel if specified and not using `Accelerate`
     if use_data_parallel and not use_accelerator:
         print(f"Using DataParallel with {torch.cuda.device_count()} GPUs")
-        model = torch.nn.DataParallel(model, device_ids=[0, 1, 2])
+        model = torch.nn.DataParallel(model, device_ids=[0, 1, 2, 3])
 
     # Prepare model and data for distributed training if accelerator is used
     if use_accelerator:
