@@ -1,58 +1,48 @@
 import torch
+from torch.distributed import destroy_process_group
 from torch.utils.data import DataLoader
-from accelerate import Accelerator
 from training import train_model
-from loader import CP  # Custom dataset class
-from model import DenoisingNetwork, DenoisingNetworkParallel  # Import both versions
+from loader import CP
+from model import DenoisingNetwork, DenoisingNetworkParallel
+from accelerate import Accelerator
 
 def main(use_accelerator=False):
-    # Initialize the accelerator
+    # Initialize accelerator if used
     accelerator = Accelerator() if use_accelerator else None
 
-    # Determine the device from accelerator or use default CUDA/CPU fallback
-    device = accelerator.device if use_accelerator else torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # Load the CP dataset
+    # Set device and load data
+    device = accelerator.device if accelerator else torch.device("cuda" if torch.cuda.is_available() else "cpu")
     romane_dir = '/home/GRAMES.POLYMTL.CA/andim/joplin-intra-inter/CP_rigid_trios/CP'
     train_dataset = CP(root_dir=romane_dir, age_csv=f'{romane_dir}/trios_sorted_by_age.csv', transfo_type='rigid')
-
-    # Create DataLoader
     train_loader = DataLoader(train_dataset, batch_size=2, shuffle=True)
 
-    # Choose the appropriate model
-    if use_accelerator:
-        print("Using parallel DenoisingNetwork with multiple GPUs")
-        model = DenoisingNetworkParallel(input_shape=(1, 256, 256, 105), filters=64, age_embedding_dim=128)
-    else:
-        print("Using standard DenoisingNetwork")
-        model = DenoisingNetwork(input_shape=(1, 256, 256, 105), filters=64, age_embedding_dim=128)
+    # Select model
+    model = DenoisingNetworkParallel(input_shape=(1, 256, 256, 105), filters=64, age_embedding_dim=128) \
+            if use_accelerator else DenoisingNetwork(input_shape=(1, 256, 256, 105), filters=64, age_embedding_dim=128)
 
-    # Prepare model and data for distributed training if accelerator is enabled
+    # Prepare model and data for distributed training if accelerator is used
     if use_accelerator:
-        # Prepare model and dataloader with the accelerator
         model, train_loader = accelerator.prepare(model, train_loader)
     else:
-        # Move model to the appropriate device
         model.to(device)
 
-    # Define the noise schedule with float32 dtype
+    # Noise schedule
     noise_schedule = torch.linspace(1e-4, 5e-3, 1000, dtype=torch.float32).to(device)
 
-    # Train the model using the accelerator if enabled
+    # Train model
     train_model(model, train_loader, noise_schedule, epochs=10, lambda_fusion=0.6, accelerator=accelerator)
 
-    # Save the trained model state only on the main process when using the accelerator
+    # Save model on main process only
     if not use_accelerator or accelerator.is_main_process:
         torch.save(model.state_dict(), "checkpoints/model.pth")
 
+    # Shutdown process group to avoid NCCL warnings
+    if torch.distributed.is_initialized():
+        destroy_process_group()
+
 if __name__ == "__main__":
-    # Set use_accelerator to True to run with multi-GPU support
     main(use_accelerator=True)
 
-
-if __name__ == "__main__":
-    # Run without accelerator by default
-    main(use_accelerator=True)
 
 
 
