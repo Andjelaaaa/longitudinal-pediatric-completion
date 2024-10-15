@@ -7,8 +7,18 @@ from loader import CP
 from model import DenoisingNetwork, DenoisingNetworkParallel
 from accelerate import Accelerator
 
+# Register hooks to track memory usage
+def memory_hook(module, input, output):
+    print(f"{module.__class__.__name__} | Allocated Memory: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
+    print(f"Max Memory Allocated: {torch.cuda.max_memory_allocated() / 1024**2:.2f} MB\n")
+
+def register_hooks(model):
+    for layer in model.modules():
+        if isinstance(layer, torch.nn.Module):
+            layer.register_forward_hook(memory_hook)
+
 def main(use_accelerator, use_data_parallel):
-    # Initialize accelerator if model parallelism is requested
+    # Initialize accelerator if used
     accelerator = Accelerator(mixed_precision="fp16") if use_accelerator else None
 
     # Set device and load data
@@ -21,18 +31,17 @@ def main(use_accelerator, use_data_parallel):
     model = DenoisingNetworkParallel(input_shape=(1, 256, 256, 105), filters=64, age_embedding_dim=128) \
             if use_accelerator else DenoisingNetwork(input_shape=(1, 256, 256, 105), filters=64, age_embedding_dim=128)
 
-    # Use DataParallel if specified and not using `Accelerate`
-    if use_data_parallel and not use_accelerator:
-        print(f"Using DataParallel with {torch.cuda.device_count()} GPUs")
-        model = torch.nn.DataParallel(model, device_ids=[0, 1, 2, 3])
+    # Register memory hooks to monitor usage
+    register_hooks(model)
 
     # Prepare model and data for distributed training if accelerator is used
     if use_accelerator:
         model, train_loader = accelerator.prepare(model, train_loader)
-    else:
-        model.to(device)
+    elif use_data_parallel:
+        model = torch.nn.DataParallel(model, device_ids=[0, 1, 2])
+    model.to(device)
 
-    # Count the total number of parameters in the model
+    # Count number of parameters in the model
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Total trainable parameters: {total_params:,}")
 
@@ -40,32 +49,30 @@ def main(use_accelerator, use_data_parallel):
     for name, param in model.named_parameters():
         print(f"{name} is on {param.device}")
 
-    # Define noise schedule
+    # Noise schedule
     noise_schedule = torch.linspace(1e-4, 5e-3, 1000, dtype=torch.float32).to(device)
 
     # Train the model
     train_model(model, train_loader, noise_schedule, epochs=10, lambda_fusion=0.6, accelerator=accelerator)
 
-    # Save the model only on the main process
+    # Save model on main process only
     if not use_accelerator or accelerator.is_main_process:
         torch.save(model.state_dict(), "checkpoints/model.pth")
 
-    # Shutdown the process group to avoid NCCL warnings
+    # Shutdown process group to avoid NCCL warnings
     if torch.distributed.is_initialized():
         destroy_process_group()
 
 if __name__ == "__main__":
     # Parse command-line arguments
-    parser = argparse.ArgumentParser(description="Train the model with data or model parallelism.")
-    parser.add_argument("--use_accelerator", type=bool, default=False, 
-                        help="Use accelerator for model parallelism.")
-    parser.add_argument("--use_data_parallel", type=bool, default=False, 
-                        help="Use DataParallel for data parallelism.")
-
+    parser = argparse.ArgumentParser(description="Train the model with or without an accelerator.")
+    parser.add_argument("--use_accelerator", type=bool, default=False, help="Use accelerator for FSDP.")
+    parser.add_argument("--use_data_parallel", type=bool, default=False, help="Use DataParallel for multi-GPU training.")
     args = parser.parse_args()
 
     # Run the main function with the parsed arguments
     main(use_accelerator=args.use_accelerator, use_data_parallel=args.use_data_parallel)
+
 
 
 

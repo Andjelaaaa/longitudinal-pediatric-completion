@@ -58,6 +58,12 @@ def train_step(model, optimizer, inputs, noise_schedule, lambda_fusion, accelera
 
     return loss
 
+def monitor_data_batch(inputs):
+    total_data_size = sum([input.element_size() * input.nelement() for input in inputs]) / 1024**2
+    print(f"Batch size: {total_data_size:.2f} MB")
+    for i, input_tensor in enumerate(inputs):
+        print(f"Input {i} | Size: {input_tensor.size()} | Memory: {input_tensor.element_size() * input_tensor.nelement() / 1024**2:.2f} MB")
+
 # Main training function
 def train_model(model, train_loader, noise_schedule, epochs=10, lambda_fusion=0.6, accelerator=None):
     """
@@ -82,6 +88,7 @@ def train_model(model, train_loader, noise_schedule, epochs=10, lambda_fusion=0.
         epoch_loss = 0
 
         for step, inputs in enumerate(train_loader):
+            monitor_data_batch(inputs)
             # Perform a training step
             loss = train_step(model, optimizer, inputs, noise_schedule, lambda_fusion, accelerator)
 
