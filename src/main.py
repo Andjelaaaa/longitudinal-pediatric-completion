@@ -1,29 +1,38 @@
 import torch
 from torch.utils.data import DataLoader
+from accelerate import Accelerator
 from training import train_model
 from loader import CP  # Custom dataset class
-from model import DenoisingNetwork
+from model import DenoisingNetworkParallel  # Use the parallelized model
 
 def main():
+    # Initialize the accelerator for FSDP
+    accelerator = Accelerator()
+
     # Load the CP dataset
-    # train_dataset = CP(root_dir='./data/CP/', age_csv='./data/CP/trios_sorted_by_age.csv')
     romane_dir = '/home/GRAMES.POLYMTL.CA/andim/joplin-intra-inter/CP_rigid_trios/CP'
     train_dataset = CP(root_dir=romane_dir, age_csv=f'{romane_dir}/trios_sorted_by_age.csv', transfo_type='rigid')
-    train_loader = DataLoader(train_dataset, batch_size=2, shuffle=True)
 
-    # Define the model
-    model = DenoisingNetwork(input_shape=(1, 256, 256, 105), filters=64, age_embedding_dim=128)
-    # Convert the model to double precision (float64)
+    # Create DataLoader and prepare it for the accelerator
+    train_loader = DataLoader(train_dataset, batch_size=2, shuffle=True)
+    train_loader = accelerator.prepare(train_loader)
+
+    # Define the model with model parallelism
+    model = DenoisingNetworkParallel(input_shape=(1, 256, 256, 105), filters=64, age_embedding_dim=128)
+
+    # Convert model to double precision and prepare for accelerator
     model = model.double()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
+    model = accelerator.prepare(model)
 
     # Define the noise schedule
+    device = accelerator.device
     noise_schedule = torch.linspace(1e-4, 5e-3, 1000).to(device)
 
-    # Train the model and track metrics in WandB
+    # Train the model using the accelerator's FSDP features
     train_model(model, train_loader, noise_schedule, epochs=10, lambda_fusion=0.6, device=device)
 
+    # Save the trained model's state using the accelerator's utility
+    accelerator.save_state("checkpoints/")
 
 # Main training function
 # def main():

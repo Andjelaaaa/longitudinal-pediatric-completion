@@ -167,6 +167,51 @@ class DenoisingNetwork(nn.Module):
         output = self.final_conv(reconstructed)
 
         return output
+    
+class DenoisingNetworkParallel(nn.Module):
+    def __init__(self, input_shape, filters=64, age_embedding_dim=128):
+        super(DenoisingNetworkParallel, self).__init__()
+
+        # GPU 0 - Embedding and Downsample
+        self.age_embedding = AgeEmbedding(embedding_dim=age_embedding_dim).to('cuda:0')
+        self.res_block = nn.Conv3d(1, filters, kernel_size=3, padding=1).to('cuda:0')
+        self.downsample = nn.Conv3d(filters, filters, kernel_size=3, stride=2, padding=1).to('cuda:0')
+
+        # GPU 1 - Self-Attention and LoCI Fusion
+        self.self_attention = SelfAttention(pixel_dim=filters).to('cuda:1')
+        self.loci_fusion = LoCIFusionModule(pixel_dim=filters).to('cuda:1')
+
+        # GPU 2 - GAM and Final Reconstruction
+        self.gam = GAM(pixel_dim=filters).to('cuda:2')
+        self.upsample = nn.ConvTranspose3d(filters, filters, kernel_size=3, stride=2, padding=1).to('cuda:2')
+        self.final_conv = nn.Conv3d(in_channels=filters, out_channels=1, kernel_size=3, padding=1).to('cuda:2')
+
+    def forward(self, p, t, s, age):
+        # Transfer inputs to GPU 0
+        p, t, s, age = p.to('cuda:0'), t.to('cuda:0'), s.to('cuda:0'), age.to('cuda:0')
+
+        # Age embedding and downsampling
+        age_emb = self.age_embedding(age)
+        p_features = self.downsample(self.res_block(p))
+        t_features = self.downsample(self.res_block(t))
+        s_features = self.downsample(self.res_block(s))
+
+        # Transfer features to GPU 1 for self-attention and fusion
+        p_features, s_features = p_features.to('cuda:1'), s_features.to('cuda:1')
+        p_features = self.self_attention(p_features)
+        s_features = self.self_attention(s_features)
+        fused_p, fused_s = self.loci_fusion(p_features, s_features)
+
+        # Transfer to GPU 2 for GAM and reconstruction
+        fused_p, fused_s, t_features = fused_p.to('cuda:2'), fused_s.to('cuda:2'), t_features.to('cuda:2')
+        fusion_condition = fused_p + fused_s + t_features
+        gam_output = self.gam(fusion_condition)
+
+        # Upsample and reconstruct the output
+        reconstructed = self.upsample(gam_output)
+        output = self.final_conv(reconstructed)
+
+        return output
 
 # # Example usage
 # input_shape = (64, 64, 64)  # Example 3D input shape (depth, height, width)
