@@ -1,3 +1,4 @@
+import argparse
 import torch
 from torch.distributed import destroy_process_group
 from torch.utils.data import DataLoader
@@ -6,7 +7,7 @@ from loader import CP
 from model import DenoisingNetwork, DenoisingNetworkParallel
 from accelerate import Accelerator
 
-def main(use_accelerator=False):
+def main(use_accelerator):
     # Initialize accelerator if used
     accelerator = Accelerator(mixed_precision="fp16") if use_accelerator else None
 
@@ -49,7 +50,15 @@ def main(use_accelerator=False):
         destroy_process_group()
 
 if __name__ == "__main__":
-    main(use_accelerator=True)
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description="Train the model with or without an accelerator.")
+    parser.add_argument("--use_accelerator", type=bool, default=False, 
+                        help="Set to True to use the accelerator, otherwise False.")
+    args = parser.parse_args()
+
+    # Run the main function with the parsed argument
+    main(use_accelerator=args.use_accelerator)
+
 
 
 
