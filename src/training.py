@@ -63,11 +63,12 @@ def train_model(model, train_loader, noise_schedule, epochs=10, lambda_fusion=0.
     """
     optimizer = torch.optim.Adam(model.parameters(), lr=2e-4)
 
-    # Prepare model, optimizer, and data loader for distributed training
-    model, optimizer, train_loader = accelerator.prepare(model, optimizer, train_loader)
+    # If an accelerator is provided, use it to prepare model, optimizer, and dataloader
+    if accelerator:
+        model, optimizer, train_loader = accelerator.prepare(model, optimizer, train_loader)
 
     # Initialize WandB for tracking metrics (only on the main process)
-    if accelerator.is_main_process:
+    if accelerator is None or accelerator.is_main_process:
         wandb.init(project="long-ped-comp", entity="adimitri")
         wandb.watch(model, log="all")
 
@@ -76,25 +77,26 @@ def train_model(model, train_loader, noise_schedule, epochs=10, lambda_fusion=0.
         epoch_loss = 0
 
         for step, inputs in enumerate(train_loader):
-            # Perform a training step with the accelerator
+            # Perform a training step
             loss = train_step(model, optimizer, inputs, noise_schedule, lambda_fusion, accelerator)
 
-            # Accumulate the loss for epoch logging
+            # Accumulate epoch loss
             epoch_loss += loss.item()
 
-            # Log step-wise loss (only on the main process)
-            if step % 10 == 0 and accelerator.is_main_process:
+            # Log step-wise loss (only on main process)
+            if step % 10 == 0 and (accelerator is None or accelerator.is_main_process):
                 print(f"Step {step}, Loss: {loss.item()}")
                 wandb.log({"batch_loss": loss.item(), "epoch": epoch + 1})
 
-        # Log the average loss for the epoch (only on the main process)
+        # Log epoch loss
         epoch_loss /= len(train_loader)
-        if accelerator.is_main_process:
+        if accelerator is None or accelerator.is_main_process:
             wandb.log({"epoch_loss": epoch_loss, "epoch": epoch + 1})
 
-    # Save the model state (only on the main process)
-    if accelerator.is_main_process:
+    # Save the model state (only on main process)
+    if accelerator is None or accelerator.is_main_process:
         torch.save(model.state_dict(), "model.pth")
 
-    # Wait for all processes to finish (barrier)
-    accelerator.wait_for_everyone()
+    # Wait for all processes to finish
+    if accelerator:
+        accelerator.wait_for_everyone()
