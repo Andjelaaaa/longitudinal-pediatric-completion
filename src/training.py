@@ -26,33 +26,28 @@ def train_step(model, optimizer, inputs, noise_schedule, lambda_fusion, accelera
     3. Backward pass
     4. Update model weights
     """
-    model.train()  # Ensure the model is in training mode
+    model.train()  # Ensure training mode
 
-    # Unpack inputs: p (preceding), t (target), s (subsequent), age (age tensor)
-    p, t, s, age = inputs
+    # Move inputs to the appropriate device using accelerator
+    p, t, s, age = [x.to(accelerator.device) for x in inputs]
 
-    # Generate a random noise level based on the noise schedule
+    # Generate random noise level
     noise_level = torch.rand(1).item() * (noise_schedule[-1] - noise_schedule[0]) + noise_schedule[0]
     noisy_t = t + noise_level * torch.randn_like(t).to(t.device)
-
-    # Ground truth noise (eps) to be removed from the noisy target image
     eps = torch.randn_like(t).to(t.device)
 
-    # Zero out gradients before backward pass
+    # Zero out gradients
     optimizer.zero_grad()
 
-    # Forward pass through the model
+    # Forward pass with autocast for mixed precision
     with accelerator.autocast():
         predicted_eps, loci_outputs_p, loci_outputs_s = model(p, noisy_t, s, age)
+        predicted_eps = predicted_eps - noisy_t  # Adjust predicted noise
 
-        # Adjust predicted_eps to align with the noise schedule
-        c_fused = predicted_eps
-        predicted_eps = c_fused - noisy_t  # Predicted noise to be subtracted
-
-        # Calculate the total loss
+        # Compute total loss
         loss = total_loss(eps, predicted_eps, loci_outputs_p, loci_outputs_s, lambda_fusion)
 
-    # Backward pass (compute gradients) and optimizer step with accelerator support
+    # Backward pass and optimization step
     accelerator.backward(loss)
     optimizer.step()
 

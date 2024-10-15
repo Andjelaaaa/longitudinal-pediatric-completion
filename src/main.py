@@ -26,7 +26,7 @@ def main():
 
     # Define the noise schedule
     device = accelerator.device
-    noise_schedule = torch.linspace(1e-4, 5e-3, 1000).to(device)
+    noise_schedule = torch.linspace(1e-4, 5e-3, 1000).to(device) #int()
 
     # Train the model using the accelerator's FSDP features
     train_model(model, train_loader, noise_schedule, epochs=10, lambda_fusion=0.6, device=device)
