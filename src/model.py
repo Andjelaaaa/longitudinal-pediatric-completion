@@ -187,7 +187,7 @@ class DenoisingNetworkParallel(nn.Module):
         self.final_conv = nn.Conv3d(in_channels=filters, out_channels=1, kernel_size=3, padding=1).to('cuda:2')
 
     def forward(self, p, t, s, age):
-        # Transfer inputs to GPU 0
+        # Move inputs to GPU 0
         p, t, s, age = p.to('cuda:0'), t.to('cuda:0'), s.to('cuda:0'), age.to('cuda:0')
 
         # Age embedding and downsampling
@@ -196,22 +196,31 @@ class DenoisingNetworkParallel(nn.Module):
         t_features = self.downsample(self.res_block(t))
         s_features = self.downsample(self.res_block(s))
 
-        # Transfer features to GPU 1 for self-attention and fusion
-        p_features, s_features = p_features.to('cuda:1'), s_features.to('cuda:1')
+        # Reshape and move features to GPU 1 for self-attention and fusion
+        p_features = p_features.flatten(start_dim=2).permute(0, 2, 1).to('cuda:1')  # (batch_size, num_pixels, filters)
+        s_features = s_features.flatten(start_dim=2).permute(0, 2, 1).to('cuda:1')
+
+        # Apply Self-Attention
         p_features = self.self_attention(p_features)
         s_features = self.self_attention(s_features)
+
+        # LoCI Fusion
         fused_p, fused_s = self.loci_fusion(p_features, s_features)
 
-        # Transfer to GPU 2 for GAM and reconstruction
-        fused_p, fused_s, t_features = fused_p.to('cuda:2'), fused_s.to('cuda:2'), t_features.to('cuda:2')
+        # Move to GPU 2 for GAM and reconstruction
+        fused_p, fused_s = fused_p.to('cuda:2'), fused_s.to('cuda:2')
+        t_features = t_features.flatten(start_dim=2).permute(0, 2, 1).to('cuda:2')
+
+        # Use GAM to fuse with age information
         fusion_condition = fused_p + fused_s + t_features
         gam_output = self.gam(fusion_condition)
 
-        # Upsample and reconstruct the output
-        reconstructed = self.upsample(gam_output)
+        # Upsample and reshape the output back to 3D
+        reconstructed = self.upsample(gam_output.permute(0, 2, 1).view(*p.size()))  # Reshape to original shape
         output = self.final_conv(reconstructed)
 
         return output
+
 
 # # Example usage
 # input_shape = (64, 64, 64)  # Example 3D input shape (depth, height, width)

@@ -2,9 +2,9 @@ import torch
 from torch.utils.data import DataLoader
 from training import train_model
 from loader import CP  # Custom dataset class
-from model import DenoisingNetworkParallel  # Use the parallelized model
+from model import DenoisingNetwork, DenoisingNetworkParallel  # Import both versions
 
-def main():
+def main(use_accelerator=False):
     # Check if CUDA is available and set the device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -15,8 +15,16 @@ def main():
     # Create DataLoader
     train_loader = DataLoader(train_dataset, batch_size=2, shuffle=True)
 
-    # Define the model and move it to the appropriate device
-    model = DenoisingNetworkParallel(input_shape=(1, 256, 256, 105), filters=64, age_embedding_dim=128).to(device)
+    # Choose the appropriate model
+    if use_accelerator:
+        print("Using parallel DenoisingNetwork with multiple GPUs")
+        model = DenoisingNetworkParallel(input_shape=(1, 256, 256, 105), filters=64, age_embedding_dim=128)
+    else:
+        print("Using standard DenoisingNetwork")
+        model = DenoisingNetwork(input_shape=(1, 256, 256, 105), filters=64, age_embedding_dim=128)
+
+    # Move model to the appropriate device
+    model.to(device)
 
     # Define the noise schedule with float32 dtype
     noise_schedule = torch.linspace(1e-4, 5e-3, 1000, dtype=torch.float32).to(device)
@@ -26,6 +34,10 @@ def main():
 
     # Save the trained model
     torch.save(model.state_dict(), "checkpoints/model.pth")
+
+if __name__ == "__main__":
+    # Run without accelerator by default
+    main(use_accelerator=False)
 
 
 
@@ -84,5 +96,4 @@ def main():
 #     # Close the TensorBoard writer
 #     writer.close()
 
-if __name__ == "__main__":
-    main()
+
