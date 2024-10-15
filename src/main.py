@@ -15,20 +15,19 @@ def main():
     # Create DataLoader
     train_loader = DataLoader(train_dataset, batch_size=2, shuffle=True)
 
-    # Define the model
-    model = DenoisingNetworkParallel(input_shape=(1, 256, 256, 105), filters=64, age_embedding_dim=128)
+    # Define the model and move it to the appropriate device
+    model = DenoisingNetworkParallel(input_shape=(1, 256, 256, 105), filters=64, age_embedding_dim=128).to(device)
 
-    # Move model to the appropriate device
-    model.to(device)
-
-    # Define the noise schedule
-    noise_schedule = torch.linspace(1e-4, 5e-3, 1000).to(device)
+    # Define the noise schedule with float32 dtype
+    noise_schedule = torch.linspace(1e-4, 5e-3, 1000, dtype=torch.float32).to(device)
 
     # Train the model
     train_model(model, train_loader, noise_schedule, epochs=10, lambda_fusion=0.6)
 
     # Save the trained model
     torch.save(model.state_dict(), "checkpoints/model.pth")
+
+
 
 
 

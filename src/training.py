@@ -26,13 +26,11 @@ def train_step(model, optimizer, inputs, noise_schedule, lambda_fusion, accelera
     3. Backward pass
     4. Update model weights
     """
-    model.train()  # Ensure training mode
-
     # Determine the device (use accelerator if available, otherwise fallback to CPU/GPU)
     device = accelerator.device if accelerator else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    # Move inputs to the selected device
-    p, t, s, age = [x.to(device) for x in inputs]
+    # Move inputs to the selected device and ensure they are float32
+    p, t, s, age = [x.to(device).float() for x in inputs]
 
     # Generate random noise level
     noise_level = torch.rand(1).item() * (noise_schedule[-1] - noise_schedule[0]) + noise_schedule[0]
@@ -47,21 +45,13 @@ def train_step(model, optimizer, inputs, noise_schedule, lambda_fusion, accelera
         with accelerator.autocast():
             predicted_eps, loci_outputs_p, loci_outputs_s = model(p, noisy_t, s, age)
             predicted_eps = predicted_eps - noisy_t  # Adjust predicted noise
-
-            # Compute total loss
             loss = total_loss(eps, predicted_eps, loci_outputs_p, loci_outputs_s, lambda_fusion)
-
-        # Backward pass and optimization step
         accelerator.backward(loss)
     else:
-        # Standard forward pass if no accelerator is available
+        # Standard forward pass
         predicted_eps, loci_outputs_p, loci_outputs_s = model(p, noisy_t, s, age)
         predicted_eps = predicted_eps - noisy_t  # Adjust predicted noise
-
-        # Compute total loss
         loss = total_loss(eps, predicted_eps, loci_outputs_p, loci_outputs_s, lambda_fusion)
-
-        # Backward pass and optimization step
         loss.backward()
 
     optimizer.step()

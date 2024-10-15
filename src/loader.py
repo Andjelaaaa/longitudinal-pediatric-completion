@@ -110,13 +110,14 @@ class CP(Dataset):
         else:
             img_data = np.zeros_like(img_data)
 
-        # Convert to TorchIO ScalarImage for resampling, ensuring float64 data type
-        tio_image = tio.ScalarImage(tensor=torch.tensor(img_data, dtype=torch.float64).unsqueeze(0))  # Add channel dimension
+        # Convert to TorchIO ScalarImage with float32 data type
+        tio_image = tio.ScalarImage(tensor=torch.tensor(img_data, dtype=torch.float32).unsqueeze(0))  # Add channel dimension
 
         # Apply resampling transform (e.g., to 2mm isotropic voxel size)
         resampled_image = self.resample_transform(tio_image)
 
         return resampled_image.data  # Return the resampled tensor
+
 
     def get_age_for_target(self, target_image_name):
         """
@@ -137,21 +138,16 @@ class CP(Dataset):
         img_2 = self.load_and_normalize_nii(img_2_path)  # Target
         img_3 = self.load_and_normalize_nii(img_3_path)  # Subsequent
 
-        # Optionally resize the 3D images using torchio
-        # if self.resize_transform:
-        #     img_1 = torch.tensor(self.resize_transform(img_1))
-        #     img_2 = torch.tensor(self.resize_transform(img_2))
-        #     img_3 = torch.tensor(self.resize_transform(img_3))
-
         # Get the target image's name and extract its age from the CSV
         target_image_name = os.path.basename(img_2_path).replace(".nii.gz", "")
         target_age = self.get_age_for_target(target_image_name)
 
-        # Convert age to tensor
-        age_tensor = torch.tensor([target_age], dtype=torch.float64)
+        # Convert age to float32 tensor
+        age_tensor = torch.tensor([target_age], dtype=torch.float32)
 
         # Return the preceding, target, subsequent images and the age
         return img_1, img_2, img_3, age_tensor
+
 
 class BCP(Dataset):
     def __init__(self, root='./data_midslice/affine-aligned-midslice/', transform=None, trainvaltest='train', opt = None):
