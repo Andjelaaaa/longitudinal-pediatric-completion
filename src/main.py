@@ -1,38 +1,37 @@
 import torch
 from torch.utils.data import DataLoader
-from accelerate import Accelerator
 from training import train_model
 from loader import CP  # Custom dataset class
 from model import DenoisingNetworkParallel  # Use the parallelized model
 
 def main():
-    # Initialize the accelerator for FSDP
-    accelerator = Accelerator()
+    # Check if CUDA is available and set the device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load the CP dataset
     romane_dir = '/home/GRAMES.POLYMTL.CA/andim/joplin-intra-inter/CP_rigid_trios/CP'
     train_dataset = CP(root_dir=romane_dir, age_csv=f'{romane_dir}/trios_sorted_by_age.csv', transfo_type='rigid')
 
-    # Create DataLoader and prepare it for the accelerator
+    # Create DataLoader
     train_loader = DataLoader(train_dataset, batch_size=2, shuffle=True)
-    train_loader = accelerator.prepare(train_loader)
 
-    # Define the model with model parallelism
+    # Define the model
     model = DenoisingNetworkParallel(input_shape=(1, 256, 256, 105), filters=64, age_embedding_dim=128)
 
-    # Convert model to double precision and prepare for accelerator
-    model = model.double()
-    model = accelerator.prepare(model)
+    # Move model to the appropriate device
+    model.to(device)
 
     # Define the noise schedule
-    device = accelerator.device
-    noise_schedule = torch.linspace(1e-4, 5e-3, 1000).to(device) #int()
+    noise_schedule = torch.linspace(1e-4, 5e-3, 1000).to(device)
 
-    # Train the model using the accelerator's FSDP features
-    train_model(model, train_loader, noise_schedule, epochs=10, lambda_fusion=0.6, device=device)
+    # Train the model
+    train_model(model, train_loader, noise_schedule, epochs=10, lambda_fusion=0.6)
 
-    # Save the trained model's state using the accelerator's utility
-    accelerator.save_state("checkpoints/")
+    # Save the trained model
+    torch.save(model.state_dict(), "checkpoints/model.pth")
+
+
+
 
 # Main training function
 # def main():
