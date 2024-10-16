@@ -36,12 +36,15 @@ class CrossAttention(nn.Module):
 
         # Expand age features to match the number of pixels
         age_features = age_features.unsqueeze(1).expand(batch_size, num_pixels, -1)
+        print('AGE_FEATURES SHAPE:', age_features.shape)
 
         # Compute Q, K, V
         q = self.q(pixel_features)  # [batch_size, num_pixels, pixel_dim]
         k = self.k(age_features)    # [batch_size, num_pixels, pixel_dim]
         v = self.v(age_features)    # [batch_size, num_pixels, pixel_dim]
 
+        print('q SHAPE:', q.shape)
+        print('k SHAPE:', k.shape)
         # Cross-attention
         scores = torch.matmul(q, k.transpose(-2, -1)) / self.scale  # [batch_size, num_pixels, num_pixels]
         weights = F.softmax(scores, dim=-1)
