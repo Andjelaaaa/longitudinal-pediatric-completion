@@ -43,7 +43,7 @@ def main(use_accelerator, use_data_parallel):
     if use_accelerator:
         model, train_loader = accelerator.prepare(model, train_loader)
     elif use_data_parallel:
-        model = torch.nn.DataParallel(model, device_ids=[0, 1, 2])
+        model = torch.nn.DataParallel(model, device_ids=[0, 1])
     model.to(device)
 
     # Check memory after model creation
