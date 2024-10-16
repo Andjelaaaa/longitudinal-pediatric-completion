@@ -50,7 +50,8 @@ class CP(Dataset):
 
         # Set voxel size for resampling (default to 2mm isotropic)
         if opt is None or 'voxel_size' not in opt:
-            self.voxel_size = (2, 2, 2)  # Default to 2mm isotropic voxel size
+            self.voxel_size = (4, 4, 4)
+            # self.voxel_size = (2, 2, 2)  # Default to 2mm isotropic voxel size
         else:
             self.voxel_size = opt['voxel_size']
 
@@ -115,6 +116,7 @@ class CP(Dataset):
 
         # Apply resampling transform (e.g., to 2mm isotropic voxel size)
         resampled_image = self.resample_transform(tio_image)
+        print('IMAGE resampled:', resampled_image.shape)
 
         return resampled_image.data  # Return the resampled tensor
 

@@ -70,6 +70,9 @@ class SelfAttention(nn.Module):
 
         print('q self-attention', q.shape)
         print('k self-attention', k.shape)
+        print(f"q tensor size: {q.size()} | Memory allocated: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
+        print(f"v tensor size: {v.size()} | Memory allocated: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
+
         # Compute attention scores and weighted sum
         scores = torch.matmul(q, k.transpose(-2, -1)) / self.scale
         weights = F.softmax(scores, dim=-1)
