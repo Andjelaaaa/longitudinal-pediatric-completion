@@ -50,7 +50,7 @@ class CP(Dataset):
 
         # Set voxel size for resampling (default to 2mm isotropic)
         if opt is None or 'voxel_size' not in opt:
-            self.voxel_size = (4, 4, 4)
+            self.voxel_size = (4.5, 4.5, 4.5)
             # self.voxel_size = (2, 2, 2)  # Default to 2mm isotropic voxel size
         else:
             self.voxel_size = opt['voxel_size']
