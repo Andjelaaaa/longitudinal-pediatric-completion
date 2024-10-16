@@ -68,6 +68,8 @@ class SelfAttention(nn.Module):
         qkv = self.qkv(pixel_features).view(batch_size, num_pixels, 3, -1)
         q, k, v = qkv[..., 0], qkv[..., 1], qkv[..., 2]
 
+        print('q self-attention', q.shape)
+        print('k self-attention', k.shape)
         # Compute attention scores and weighted sum
         scores = torch.matmul(q, k.transpose(-2, -1)) / self.scale
         weights = F.softmax(scores, dim=-1)
