@@ -76,6 +76,7 @@ class SelfAttention(nn.Module):
         # Compute attention scores and weighted sum
         scores = torch.matmul(q, k.transpose(-2, -1)) / self.scale
         weights = F.softmax(scores, dim=-1)
+        print('SHAPE of self-att:', torch.matmul(weights, v).shape, pixel_features.shape)
         return torch.matmul(weights, v) + pixel_features  # Residual connection
 
 # LoCI Fusion Module
