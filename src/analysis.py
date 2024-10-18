@@ -229,6 +229,63 @@ def process_csv_and_calculate_averages(csv_file_path):
     # Save the updated DataFrame with the new column
     df.to_csv(csv_file_path, index=False)
 
+def plot_mean_scaling_factors(input_csv, value_column, y_title):
+    # Load the CSV file
+    df = pd.read_csv(input_csv)
+
+    # Define the trios to exclude from plotting
+    exclude_trios = ['trio-001', 'trio-177', 'trio-180', 'trio-182', 'trio-183', 'trio-186', 'trio-188', 
+                    'trio-189', 'trio-191', 'trio-192', 'trio-193']
+
+    # Filter the dataframe to exclude the specified trios
+    filtered_df = df[~df['trio_id'].isin(exclude_trios)]
+
+    # Plot the remaining trios, color based on 'sex' column (1 = Male, 0 = Female)
+    plt.figure(figsize=(10, 6))
+
+    male_plotted, female_plotted = False, False  # To track if male/female has been added to the legend
+    for trio_id, group in filtered_df.groupby('trio_id'):
+        sex_color = '#ADD8E6' if group['sex'].iloc[0] == 1 else '#F08080'
+        label = None
+        if group['sex'].iloc[0] == 1 and not male_plotted:
+            label = 'Male'
+            male_plotted = True
+        elif group['sex'].iloc[0] == 0 and not female_plotted:
+            label = 'Female'
+            female_plotted = True
+        plt.plot(group['age'], group[f'{value_column}'], marker='o', color=sex_color, label=label)
+
+    # Group the data by 'trio_id' and calculate the mean and standard deviation for each trio element (1st, 2nd, 3rd)
+    first_mean = filtered_df.groupby('trio_id').nth(0)[f'{value_column}'].mean()
+    first_std = filtered_df.groupby('trio_id').nth(0)[f'{value_column}'].std()
+    
+    second_mean = filtered_df.groupby('trio_id').nth(1)[f'{value_column}'].mean()
+    second_std = filtered_df.groupby('trio_id').nth(1)[f'{value_column}'].std()
+    
+    third_mean = filtered_df.groupby('trio_id').nth(2)[f'{value_column}'].mean()
+    third_std = filtered_df.groupby('trio_id').nth(2)[f'{value_column}'].std()
+
+    # Calculate the mean ages for the first, second, and third elements in each trio
+    mean_age_first = filtered_df.groupby('trio_id').nth(0)['age'].mean()
+    mean_age_second = filtered_df.groupby('trio_id').nth(1)['age'].mean()
+    mean_age_third = filtered_df.groupby('trio_id').nth(2)['age'].mean()
+
+    # Plot the average scaling values centered on the mean ages
+    x_values = [mean_age_first, mean_age_second, mean_age_third]
+    y_values = [first_mean, second_mean, third_mean]
+    error_values = [first_std, second_std, third_std]
+
+    # Plot the means with error bars for standard deviations
+    plt.errorbar(x_values, y_values, yerr=error_values, fmt='o-', color='black', capsize=5, label='Mean ± Std Dev')
+
+    # Adding labels and title
+    plt.xlabel('Age')
+    plt.ylabel(f'{y_title}')
+    plt.title(f'{y_title} vs Age for All Trios with Mean Curve (Centered by Age)')
+
+    # Display the plot
+    plt.legend()
+    plt.show()
 
 def create_rainbow_plot(input_csv, value_column, y_title):
     """
@@ -367,7 +424,9 @@ if __name__ == "__main__":
     # process_csv_and_calculate_scaling_factors('./data/CP/trios_sorted_by_age_with_transforms.csv')
     input_csv = 'C:\\Users\\andje\\Downloads\\trios_sorted_by_age_with_transforms.csv'
     # create_rainbow_plot(input_csv, 'scaling_avg', 'Scaling Avg')
-    analyze_mean_scaling_factors(input_csv)
+    # analyze_mean_scaling_factors(input_csv)
+    plot_mean_scaling_factors(input_csv, 'scaling_avg', 'Scaling Avg')
+    # plot_mean_scaling_factors(input_csv, 'scaling_z', 'Scaling Z')
 
     # process_csv_and_calculate_averages(input_csv)
     # create_rainbow_plot(input_csv, 'avg_intensity', 'Average Intensity')
