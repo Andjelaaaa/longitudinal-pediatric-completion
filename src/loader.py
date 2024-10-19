@@ -579,7 +579,7 @@ def preprocess_CP(trios_df):
             trios = [group.iloc[i:i+3] for i in range(0, len(group), 3)]
             
             for trio in trios:
-                if trio == 'trio-180':
+                if trio.iloc[1]["trio_id"] == 'trio-180':
                     # Extract the paths for the trio
                     path_1 = trio.iloc[0]['path']
                     path_2 = trio.iloc[1]['path']  # This is the reference
