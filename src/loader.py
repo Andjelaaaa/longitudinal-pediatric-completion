@@ -702,7 +702,7 @@ def load_and_preprocess_data():
     # # # Preprocess the data with affine registration
     trios_data = pd.read_csv(save_path)
     # trios_data = pd.read_csv('/home/andjela/Documents/CP/trios_sorted_by_age.csv')
-    abbey_path = '.data/CP/'
+    abbey_path = './data/CP'
     preprocess_affine_CP(trios_data, abbey_path, 'rigid_affine')
 
 if __name__ == "__main__":
