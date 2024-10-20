@@ -133,8 +133,8 @@ def save_transform_paths_CP(csv_file_path, rel_path, transfo_type):
             pair_3_to_2 = (trio.iloc[2]['scan_id'], trio.iloc[1]['scan_id'])
 
             # Define paths for the transformation files
-            transform_1_to_2 = f'{rel_path}/{sub_id}/{trio_id}/{transfo_type}_mov2fix_{pair_1_to_2[0]}_{pair_1_to_2[1]}Composite.h5'
-            transform_3_to_2 = f'{rel_path}/{sub_id}/{trio_id}/{transfo_type}_mov2fix_{pair_3_to_2[0]}_{pair_3_to_2[1]}Composite.h5'
+            transform_1_to_2 = f'{rel_path}/{sub_id}/{trio_id}/{transfo_type}_mov2fix_{pair_1_to_2[0]}_{pair_1_to_2[1]}InverseComposite.h5'
+            transform_3_to_2 = f'{rel_path}/{sub_id}/{trio_id}/{transfo_type}_mov2fix_{pair_3_to_2[0]}_{pair_3_to_2[1]}InverseComposite.h5'
 
             ### Handle pair_1_to_2 (scan_1 -> scan_2)
             if pair_1_to_2 not in saved_paths_for_pairs:
@@ -415,17 +415,18 @@ def analyze_mean_scaling_factors(input_csv):
 
 if __name__ == "__main__":
     # input_csv = '/home/andjela/Documents/CP/trios_sorted_by_age.csv'
-    # transfo_type = 'rigid_affine'
-    # abbey_path = '/home/GRAMES.POLYMTL.CA/andim/joplin-intra-inter/CP_rigid_trios/CP'
-    # save_transform_paths_CP(input_csv, abbey_path, transfo_type)
+    input_csv = './data/CP/trios_sorted_by_age.csv'
+    transfo_type = 'rigid_affine'
+    abbey_path = '/home/GRAMES.POLYMTL.CA/andim/joplin-intra-inter/CP_rigid_trios/CP'
+    save_transform_paths_CP(input_csv, abbey_path, transfo_type)
 
     # input_csv = '/home/andjela/Documents/CP/trios_sorted_by_age_with_transforms.csv'
     # rel_path = '/home/andjela/joplin-intra-inter/CP_rigid_trios'
     # process_csv_and_calculate_scaling_factors('./data/CP/trios_sorted_by_age_with_transforms.csv')
-    input_csv = 'C:\\Users\\andje\\Downloads\\trios_sorted_by_age_with_transforms.csv'
+    # input_csv = 'C:\\Users\\andje\\Downloads\\trios_sorted_by_age_with_transforms.csv'
     # create_rainbow_plot(input_csv, 'scaling_avg', 'Scaling Avg')
     # analyze_mean_scaling_factors(input_csv)
-    plot_mean_scaling_factors(input_csv, 'scaling_avg', 'Scaling Avg')
+    # plot_mean_scaling_factors(input_csv, 'scaling_avg', 'Scaling Avg')
     # plot_mean_scaling_factors(input_csv, 'scaling_z', 'Scaling Z')
 
     # process_csv_and_calculate_averages(input_csv)

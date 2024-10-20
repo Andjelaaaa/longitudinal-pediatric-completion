@@ -706,7 +706,7 @@ def load_and_preprocess_data():
     preprocess_affine_CP(trios_data, abbey_path, 'rigid_affine')
 
 if __name__ == "__main__":
-    load_and_preprocess_data()
+    # load_and_preprocess_data()
     # input_csv = './data/CP/trios_sorted_by_age.csv'  # Path to your input CSV
     # input_csv = '/home/andjela/Documents/CP/trios_sorted_by_age.csv'
     # transfo_type = 'rigid_affine'
