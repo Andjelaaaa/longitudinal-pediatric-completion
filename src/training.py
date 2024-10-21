@@ -13,9 +13,14 @@ def total_loss(eps, predicted_eps, c_pred_p, c_pred_s, lambda_fusion=0.6):
     """
     Compute the total loss by combining the diffusion loss and fusion loss.
     """
+    # Diffusion loss (for predicting the added noise)
     l_diff = diffusion_loss(eps, predicted_eps)
+    
+    # Fusion loss (consistency between preceding and subsequent image features)
     l_fusion = fusion_loss(c_pred_p, c_pred_s)
+    
     return l_diff + lambda_fusion * l_fusion
+
 
 # Training step function with Accelerator support
 def train_step(model, optimizer, inputs, noise_schedule, lambda_fusion, accelerator=None):
@@ -34,8 +39,8 @@ def train_step(model, optimizer, inputs, noise_schedule, lambda_fusion, accelera
 
     # Generate random noise level
     noise_level = torch.rand(1).item() * (noise_schedule[-1] - noise_schedule[0]) + noise_schedule[0]
-    noisy_t = t + noise_level * torch.randn_like(t).to(device)
-    eps = torch.randn_like(t).to(device)
+    noisy_t = t + noise_level * torch.randn_like(t).to(device)  # Add noise to target
+    eps = torch.randn_like(t).to(device)  # The random noise component
 
     # Zero out gradients
     optimizer.zero_grad()
@@ -43,6 +48,7 @@ def train_step(model, optimizer, inputs, noise_schedule, lambda_fusion, accelera
     # Forward pass with autocast for mixed precision (only if accelerator is used)
     if accelerator:
         with accelerator.autocast():
+            # Model forward pass
             predicted_eps, loci_outputs_p, loci_outputs_s = model(p, noisy_t, s, age)
             predicted_eps = predicted_eps - noisy_t  # Adjust predicted noise
             loss = total_loss(eps, predicted_eps, loci_outputs_p, loci_outputs_s, lambda_fusion)
@@ -89,6 +95,7 @@ def train_model(model, train_loader, noise_schedule, epochs=10, lambda_fusion=0.
 
         for step, inputs in enumerate(train_loader):
             monitor_data_batch(inputs)
+            
             # Perform a training step
             loss = train_step(model, optimizer, inputs, noise_schedule, lambda_fusion, accelerator)
 

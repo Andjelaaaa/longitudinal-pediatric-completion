@@ -707,7 +707,7 @@ def load_and_preprocess_data():
 
 if __name__ == "__main__":
     # load_and_preprocess_data()
-    # input_csv = './data/CP/trios_sorted_by_age.csv'  # Path to your input CSV
+    input_csv = './data/CP/trios_sorted_by_age.csv'  # Path to your input CSV
     # input_csv = '/home/andjela/Documents/CP/trios_sorted_by_age.csv'
     # transfo_type = 'rigid_affine'
     # abbey_path = '/home/GRAMES.POLYMTL.CA/andim/joplin-intra-inter/CP_rigid_trios/CP'
