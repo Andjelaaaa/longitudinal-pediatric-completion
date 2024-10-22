@@ -4,9 +4,10 @@ from torch.distributed import destroy_process_group
 from torch.utils.data import DataLoader
 from training import train_model  # Your training loop is now in training.py
 from loader import CP  # Custom dataset loader
-from model import DPM, GAMUNet  # Import your model classes
+from model import DPM, GAMUNet, FusionModule  # Import your model classes
 from accelerate import Accelerator
 import numpy as np
+import tqdm
 
 def train():
     device = torch.device("cuda")
@@ -20,53 +21,51 @@ def train():
     n_feat = 8  # 128 ok, 256 better (but slower)
     lrate = 1e-4
 
-    # ViViT hyperparameters
-    patch_size = (8, 32, 32)
+    andjela_dir = '/home/andjela/joplin-intra-inter/CP_rigid_trios/CP'
+    train_dataset = CP(root_dir=andjela_dir, age_csv=f'{andjela_dir}/trios_sorted_by_age.csv', transfo_type='rigid')
+    train_loader = DataLoader(train_dataset, batch_size=1, shuffle=True, pin_memory=True, num_workers=5)
 
-    dataset = ACDCDataset(data_dir="data", split="trn")
-    train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=5)
-
-    valid_loader = DataLoader(ACDCDataset(data_dir="data", split="val"), batch_size=batch_size, shuffle=False, num_workers=1)
-    x_val, x_prev_val = next(iter(valid_loader))
-    x_prev_val = x_prev_val.to(device)
+    # valid_loader = DataLoader(ACDCDataset(data_dir="data", split="val"), batch_size=batch_size, shuffle=False, num_workers=1)
+    # x_val, x_prev_val = next(iter(valid_loader))
+    # x_prev_val = x_prev_val.to(device)
 
 
-    vivit_model = ViViT(image_size, patch_size, num_frames)
-    nn_model = ContextUnet(in_channels=1, n_feat=n_feat, in_shape=(1, *image_size))
+    fusion_model = FusionModule(input_shape=(1, 256, 256, 105), in_channels=1, filters=64, age_embedding_dim=128, num_repeats=4)
+    nn_model = GAMUNet(in_channels=1, n_feat=n_feat, in_shape=(1, *image_size))
 
-    ddpm = DDPM(vivit_model=vivit_model, nn_model=nn_model,
+    ddpm = DPM(fusion_model=fusion_model, nn_model=nn_model,
                 betas=(1e-4, 0.02), n_T=n_T, device=device, drop_prob=0.1)
     ddpm.to(device)
 
     optim = torch.optim.Adam(ddpm.parameters(), lr=lrate)
 
-    for ep in range(n_epoch):
-        print(f'epoch {ep}')
-        ddpm.train()
+    # for ep in range(n_epoch):
+    #     print(f'epoch {ep}')
+    #     ddpm.train()
 
-        # linear lrate decay
-        optim.param_groups[0]['lr'] = lrate*(1-ep/n_epoch)
+    #     # linear lrate decay
+    #     optim.param_groups[0]['lr'] = lrate*(1-ep/n_epoch)
 
-        pbar = tqdm(train_loader)
-        loss_ema = None
-        for x, x_prev in pbar:
-            optim.zero_grad()
-            x = x.to(device)
-            x_prev = x_prev.to(device)
-            loss = ddpm(x, x_prev)
-            loss.backward()
-            if loss_ema is None:
-                loss_ema = loss.item()
-            else:
-                loss_ema = 0.95 * loss_ema + 0.05 * loss.item()
-            pbar.set_description(f"loss: {loss_ema:.4f}")
-            optim.step()
+    #     pbar = tqdm(train_loader)
+    #     loss_ema = None
+    #     for x, x_prev in pbar:
+    #         optim.zero_grad()
+    #         x = x.to(device)
+    #         x_prev = x_prev.to(device)
+    #         loss = ddpm(x, x_prev)
+    #         loss.backward()
+    #         if loss_ema is None:
+    #             loss_ema = loss.item()
+    #         else:
+    #             loss_ema = 0.95 * loss_ema + 0.05 * loss.item()
+    #         pbar.set_description(f"loss: {loss_ema:.4f}")
+    #         optim.step()
 
-        ddpm.eval()
-        with torch.no_grad():
-            x_gen, x_gen_store = ddpm.sample(x_prev_val, device, guide_w=0.2)
-            np.save(f"{RESULT_DIR}/x_gen_{ep}.npy", x_gen)
-            np.save(f"{RESULT_DIR}/x_gen_store_{ep}.npy", x_gen_store)
+    #     ddpm.eval()
+    #     with torch.no_grad():
+    #         x_gen, x_gen_store = ddpm.sample(x_prev_val, device, guide_w=0.2)
+    #         np.save(f"{RESULT_DIR}/x_gen_{ep}.npy", x_gen)
+    #         np.save(f"{RESULT_DIR}/x_gen_store_{ep}.npy", x_gen_store)
 # # Register hooks to track memory usage
 # def memory_hook(module, input, output):
 #     print(f"{module.__class__.__name__} | Allocated Memory: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
