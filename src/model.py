@@ -1,50 +1,106 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
 
 # Age Embedding
 class AgeEmbedding(nn.Module):
     """
     Embeds the age input as textual features.
     """
-    def __init__(self, embedding_dim=128):
+    def __init__(self, embedding_dim):
         super(AgeEmbedding, self).__init__()
-        self.fc = nn.Linear(1, embedding_dim)  # From scalar age to embedding_dim
-        self.relu = nn.ReLU()
+        self.embedding = nn.Sequential(
+            nn.Linear(1, embedding_dim),
+            nn.ReLU(inplace=True)
+        )
 
     def forward(self, age):
-        # age is expected to be a scalar (1D tensor) or [batch_size, 1]
-        return self.relu(self.fc(age))
+        # age is expected to be a tensor of shape [batch_size, 1]
+        return self.embedding(age)
 
 # Define the RB, DS, and US blocks separately
 class ResidualBlock(nn.Module):
     def __init__(self, in_channels, filters):
         super(ResidualBlock, self).__init__()
         self.conv1 = nn.Conv3d(in_channels, filters, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm3d(filters)
+        self.relu = nn.ReLU(inplace=True)
         self.conv2 = nn.Conv3d(filters, filters, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm3d(filters)
 
     def forward(self, x):
         residual = x
-        out = F.relu(self.conv1(x))
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
         out = self.conv2(out)
+        out = self.bn2(out)
         out += residual  # Residual connection
-        return F.relu(out)
+        out = self.relu(out)
+        return out
 
 class DownsampleBlock(nn.Module):
     def __init__(self, filters):
         super(DownsampleBlock, self).__init__()
-        self.conv = nn.Conv3d(filters, filters, kernel_size=3, stride=2, padding=1)
+        self.pool = nn.MaxPool3d(kernel_size=2, stride=2)
 
     def forward(self, x):
-        return self.conv(x)
+        return self.pool(x)
 
 class UpsampleBlock(nn.Module):
     def __init__(self, filters):
         super(UpsampleBlock, self).__init__()
-        self.conv = nn.ConvTranspose3d(filters, filters, kernel_size=3, stride=2, padding=1, output_padding=1)
+        self.upconv = nn.ConvTranspose3d(filters, filters, kernel_size=2, stride=2)
 
     def forward(self, x):
-        return self.conv(x)
+        return self.upconv(x)
+
+# Global Attention Mechanism (GAM)
+class GAM(nn.Module):
+    """ Adapted from: https://github.com/dengbuqi/GAM_Pytorch/blob/main/CAM.py """
+    def __init__(self, in_channels, out_channels, age_embedding_dim, rate=4):
+        super().__init__()
+        in_channels = int(in_channels)
+        out_channels = int(out_channels)
+        inchannel_rate = int(in_channels / rate)
+
+        # Channel Attention Components
+        self.linear1 = nn.Linear(in_channels, inchannel_rate)
+        self.relu = nn.ReLU(inplace=True)
+        self.linear2 = nn.Linear(inchannel_rate, in_channels)
+        
+        # Spatial Attention Components
+        self.conv1 = nn.Conv3d(in_channels, inchannel_rate, kernel_size=7, padding=3, padding_mode='replicate')
+        self.conv2 = nn.Conv3d(inchannel_rate, out_channels, kernel_size=7, padding=3, padding_mode='replicate')
+
+        self.norm1 = nn.BatchNorm3d(inchannel_rate)
+        self.norm2 = nn.BatchNorm3d(out_channels)
+        self.sigmoid = nn.Sigmoid()
+
+        # Age Embedding Component
+        self.age_fc = nn.Linear(age_embedding_dim, in_channels)
+
+    def forward(self, x, age_emb):
+        b, c, d, h, w = x.shape
+
+        # Channel Attention
+        x_permute = x.permute(0, 2, 3, 4, 1).reshape(b, -1, c)
+        x_att_permute = self.linear2(self.relu(self.linear1(x_permute))).reshape(b, d, h, w, c)
+        x_channel_att = x_att_permute.permute(0, 4, 1, 2, 3)
+        x = x * x_channel_att
+
+        # Age-based Modulation
+        age_modulation = self.age_fc(age_emb).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+        age_modulation = age_modulation.expand(-1, -1, d, h, w)
+        x = x * age_modulation
+
+        # Spatial Attention
+        x_spatial_att = self.relu(self.norm1(self.conv1(x)))
+        x_spatial_att = self.sigmoid(self.norm2(self.conv2(x_spatial_att)))
+        out = x * x_spatial_att
+
+        return out
 
 # Cross-Attention Module
 class CrossAttention(nn.Module):
@@ -120,9 +176,14 @@ class TransformerWithSelfAttention(nn.Module):
         self.dropout2 = nn.Dropout(dropout)
 
     def forward(self, x):
+        # Reshape the 5D tensor [batch_size, channels, depth, height, width] to 3D tensor [batch_size, num_pixels, channels]
+        batch_size, channels, depth, height, width = x.size()
+        print('DIMENSIONS:', batch_size, channels, depth, height, width)
+        x_reshaped = x.view(batch_size, channels, -1).permute(2, 0, 1)  # [num_pixels, batch_size, channels]
+
         # Self-Attention with residual connection and layer normalization
-        attn_output, _ = self.self_attention(x, x, x)
-        x = x + self.dropout1(attn_output)  # Residual connection
+        attn_output, _ = self.self_attention(x_reshaped, x_reshaped, x_reshaped)
+        x = x_reshaped + self.dropout1(attn_output)  # Residual connection
         x = self.norm1(x)
 
         # Feed-Forward Network with residual connection and layer normalization
@@ -130,7 +191,10 @@ class TransformerWithSelfAttention(nn.Module):
         x = x + self.dropout2(ffn_output)  # Residual connection
         x = self.norm2(x)
 
+        # Reshape back to 5D tensor [batch_size, channels, depth, height, width]
+        x = x.permute(1, 2, 0).view(batch_size, channels, depth, height, width)
         return x
+
 
 # Self-Attention Module (SA)
 class SelfAttention(nn.Module):
@@ -159,54 +223,143 @@ class SelfAttention(nn.Module):
         return torch.matmul(weights, v) + pixel_features  # Residual connection
 
 # LoCI Fusion Module
-# LoCI Fusion Module
 class LoCIFusionModule(nn.Module):
-    """
-    Longitudinal Consistency-Informed (LoCI) module with cross-attention for preceding and subsequent latent spaces.
-    """
-    def __init__(self, pixel_dim):
+    def __init__(self, pixel_dim, num_heads=8):
         super(LoCIFusionModule, self).__init__()
-        self.cross_attention = CrossAttention(pixel_dim, pixel_dim)  # Using standard CrossAttention
-        self.norm1 = nn.LayerNorm(pixel_dim)
-        self.norm2 = nn.LayerNorm(pixel_dim)
+        self.num_layers = 3  # Number of cross-attention layers
+        self.cross_attention_layers = nn.ModuleList()
+        self.layer_norms_p = nn.ModuleList()
+        self.layer_norms_s = nn.ModuleList()
+        self.feed_forward_p = nn.ModuleList()
+        self.feed_forward_s = nn.ModuleList()
+
+        for _ in range(self.num_layers):
+            # Cross-attention layers for p_features and s_features
+            self.cross_attention_layers.append(
+                nn.MultiheadAttention(embed_dim=pixel_dim, num_heads=num_heads)
+            )
+            # Layer Normalization
+            self.layer_norms_p.append(nn.LayerNorm(pixel_dim))
+            self.layer_norms_s.append(nn.LayerNorm(pixel_dim))
+            # Feed-forward networks
+            self.feed_forward_p.append(
+                nn.Sequential(
+                    nn.Linear(pixel_dim, pixel_dim),
+                    nn.ReLU(),
+                    nn.Linear(pixel_dim, pixel_dim),
+                )
+            )
+            self.feed_forward_s.append(
+                nn.Sequential(
+                    nn.Linear(pixel_dim, pixel_dim),
+                    nn.ReLU(),
+                    nn.Linear(pixel_dim, pixel_dim),
+                )
+            )
+
+    def forward(self, p_features, s_features):
+        # Reshape to [seq_len, batch_size, embed_dim] for MultiheadAttention
+        batch_size, channels, D, H, W = p_features.shape
+        seq_len = D * H * W
+
+        # Flatten spatial dimensions and permute
+        p_features = p_features.view(batch_size, channels, seq_len).permute(2, 0, 1)
+        s_features = s_features.view(batch_size, channels, seq_len).permute(2, 0, 1)
+
+        for i in range(self.num_layers):
+            # Cross-attention from p to s
+            # Query: p_features, Key/Value: s_features
+            attn_output_p, _ = self.cross_attention_layers[i](p_features, s_features, s_features)
+            p_features = self.layer_norms_p[i](p_features + attn_output_p)
+            p_features = p_features + self.feed_forward_p[i](p_features)
+
+            # Cross-attention from s to p
+            # Query: s_features, Key/Value: p_features
+            attn_output_s, _ = self.cross_attention_layers[i](s_features, p_features, p_features)
+            s_features = self.layer_norms_s[i](s_features + attn_output_s)
+            s_features = s_features + self.feed_forward_s[i](s_features)
+
+        # After LoCI fusion, obtain context-aware consistency features
+        C_Pi = p_features
+        C_Si = s_features
+
+        # Compute Mean Squared Error (MSE) between C_Pi and C_Si for the loss function
+        # (This should be done outside this module, in your training loop or loss function)
+
+        # Optionally, you can average the features to get fused features
+        # fused_features = (C_Pi + C_Si) / 2
+
+        # Reshape back to [batch_size, channels, D, H, W]
+        # fused_features = fused_features.permute(1, 2, 0).view(batch_size, channels, D, H, W)
+
+        return C_Pi, C_Si  
+
+
+class LoCIFusionModuleV2(nn.Module):
+    def __init__(self, pixel_dim, num_heads=8, ff_dim=256, dropout=0.1):
+        super(LoCIFusionModule, self).__init__()
+
+        # Cross-Attention Layers
+        self.cross_attention_1 = nn.MultiheadAttention(embed_dim=pixel_dim, num_heads=num_heads, dropout=dropout)
+        self.cross_attention_2 = nn.MultiheadAttention(embed_dim=pixel_dim, num_heads=num_heads, dropout=dropout)
+        self.cross_attention_3 = nn.MultiheadAttention(embed_dim=pixel_dim, num_heads=num_heads, dropout=dropout)
+
+        # Feed-forward network after each attention layer
         self.feed_forward = nn.Sequential(
-            nn.Linear(pixel_dim, pixel_dim),
+            nn.Linear(pixel_dim, ff_dim),
             nn.ReLU(),
-            nn.Linear(pixel_dim, pixel_dim)
+            nn.Linear(ff_dim, pixel_dim),
+            nn.Dropout(dropout)
         )
 
-    def forward(self, p, s):
-        # p and s are the latent spaces from preceding and subsequent images
-        attended_p = self.cross_attention(p, s)  # Cross-attention between preceding and subsequent features
-        attended_s = self.cross_attention(s, p)  # Cross-attention between subsequent and preceding features
+        # Layer normalization after each attention and feed-forward step
+        self.layer_norm_1 = nn.LayerNorm(pixel_dim)
+        self.layer_norm_2 = nn.LayerNorm(pixel_dim)
+        self.layer_norm_3 = nn.LayerNorm(pixel_dim)
 
-        # Normalize and feed forward
-        p_norm = self.norm1(attended_p + p)
-        s_norm = self.norm2(attended_s + s)
-        p_ff = self.feed_forward(p_norm)
-        s_ff = self.feed_forward(s_norm)
+        # Mean Squared Error (MSE) loss for consistency between P_t and S_t
+        self.mse_loss = nn.MSELoss()
 
-        return p_ff, s_ff
+    def forward(self, p_features, s_features):
+        # Cross-attention for the first stage
+        p_q = s_k = s_v = s_features  # Query: subsequent, Key/Value: subsequent
+        s_q = p_k = p_v = p_features  # Query: preceding, Key/Value: preceding
 
+        p_fused, _ = self.cross_attention_1(p_q, p_k, p_v)
+        s_fused, _ = self.cross_attention_1(s_q, s_k, s_v)
 
-# Global Attention Mechanism (GAM)
-class GAM(nn.Module):
-    """
-    Global Attention Mechanism (GAM) for fusing global features.
-    """
-    def __init__(self, pixel_dim):
-        super(GAM, self).__init__()
-        self.fc1 = nn.Linear(pixel_dim, pixel_dim)
-        self.fc2 = nn.Linear(pixel_dim, pixel_dim)
-        self.conv = nn.Conv3d(in_channels=pixel_dim, out_channels=pixel_dim, kernel_size=1)
-        self.sigmoid = nn.Sigmoid()
+        # Residual connection and normalization
+        p_fused = self.layer_norm_1(p_fused + p_features)
+        s_fused = self.layer_norm_1(s_fused + s_features)
 
-    def forward(self, fusion_condition):
-        x = self.fc1(fusion_condition)
-        x = F.relu(x)
-        x = self.fc2(x)
-        x = self.conv(x.unsqueeze(1))  # Adding a channel dimension
-        return self.sigmoid(x)
+        # Cross-attention for the second stage
+        p_q, s_k, s_v = s_fused, s_fused, s_fused
+        s_q, p_k, p_v = p_fused, p_fused, p_fused
+
+        p_fused, _ = self.cross_attention_2(p_q, p_k, p_v)
+        s_fused, _ = self.cross_attention_2(s_q, s_k, s_v)
+
+        # Residual connection and normalization
+        p_fused = self.layer_norm_2(p_fused + p_features)
+        s_fused = self.layer_norm_2(s_fused + s_features)
+
+        # Cross-attention for the third stage
+        p_q, s_k, s_v = s_fused, s_fused, s_fused
+        s_q, p_k, p_v = p_fused, p_fused, p_fused
+
+        p_fused, _ = self.cross_attention_3(p_q, p_k, p_v)
+        s_fused, _ = self.cross_attention_3(s_q, s_k, s_v)
+
+        # Residual connection and normalization
+        p_fused = self.layer_norm_3(p_fused + p_features)
+        s_fused = self.layer_norm_3(s_fused + s_features)
+
+        # Consistency Loss between fused P_t and S_t
+        mse_loss = self.mse_loss(p_fused, s_fused)
+
+        # Output fused subsequent feature C_Si and the MSE loss
+        return s_fused, mse_loss  # Output C_Si as the fused feature
+
     
 # Cross-Attention Module
 class CrossAttentionWithAge(nn.Module):
@@ -238,90 +391,56 @@ class CrossAttentionWithAge(nn.Module):
         attended_features = torch.matmul(weights, v)
         return attended_features + pixel_features  # Residual connection
 
-class GAMWithAge(nn.Module):
-    """
-    Global Attention Mechanism (GAM) for fusing global features with age embedding.
-    Includes both channel attention and spatial attention, with support for fusion condition and skip connection.
-    """
-    def __init__(self, pixel_dim, age_dim, reduction_ratio=4):
-        super(GAMWithAge, self).__init__()
 
-        # Channel attention (Permute + MLP)
-        self.channel_mlp = nn.Sequential(
-            nn.Linear(pixel_dim, pixel_dim // reduction_ratio),
-            nn.ReLU(),
-            nn.Linear(pixel_dim // reduction_ratio, pixel_dim)
-        )
-
-        # Spatial attention (Convolutional layers for attention map)
-        self.conv1 = nn.Conv3d(pixel_dim, pixel_dim, kernel_size=1)
-        self.conv2 = nn.Conv3d(pixel_dim, pixel_dim, kernel_size=3, padding=1)
-        self.sigmoid = nn.Sigmoid()
-
-        # Cross-attention between pixel features and age embedding
-        self.cross_attention = CrossAttentionWithAge(pixel_dim=pixel_dim, age_dim=age_dim)
-
-    def forward(self, fusion_condition, age_emb):
-        """
-        fusion_condition: the concatenated input features (e.g., noisy target, C_fused).
-        age_emb: the age embedding features.
-        """
-        # 1. **Skip connection**: Store the original fusion condition for residual connection
-        skip_connection = fusion_condition
-
-        # 2. **Channel Attention**: Apply channel-wise attention
-        permuted = fusion_condition.permute(0, 2, 1)  # [batch_size, pixel_dim, num_pixels]
-        channel_attention = self.channel_mlp(permuted).permute(0, 2, 1)  # Restore original order
-
-        # 3. **Spatial Attention**: Apply spatial attention using convolution
-        spatial_attention = self.sigmoid(self.conv2(F.relu(self.conv1(fusion_condition.unsqueeze(1))))).squeeze(1)
-
-        # 4. **Cross-Attention with Age Embedding**: Fuse spatial attention with the age embedding
-        cross_attended_features = self.cross_attention(spatial_attention, age_emb)
-
-        # 5. **Final Fusion**: Combine channel attention, spatial attention, and skip connection
-        # Here, we combine the original input (skip connection), cross-attended features, and channel attention.
-        final_fusion = skip_connection + cross_attended_features + channel_attention
-
-        return final_fusion
-
-# Full Denoising Network with LoCI Fusion, TransformerWithSelfAttention, Age Embedding, and GAMWithAge
-class DenoisingNetwork(nn.Module):
+# Fusion for guiding DPM
+class FusionModule(nn.Module):
     def __init__(self, input_shape, in_channels=1, filters=64, age_embedding_dim=128, num_repeats=4):
-        super(DenoisingNetwork, self).__init__()
+        super(FusionModule, self).__init__()
 
         # Embedding the age information
         self.age_embedding = AgeEmbedding(embedding_dim=age_embedding_dim)
 
         # Define the repeated blocks for residual, downsample, LoCI Fusion, and Transformer blocks
-        self.res_downsample_blocks = nn.ModuleList()
-        self.loci_fusion_blocks = nn.ModuleList()
-        self.transformer_blocks = nn.ModuleList()
+        self.residual_blocks = nn.ModuleList()   # For Residual Blocks
+        self.downsample_blocks = nn.ModuleList() # For Downsampling
+        self.loci_fusion_blocks = nn.ModuleList()  # For LoCI Fusion
+        self.self_attention_blocks = nn.ModuleList() # For Transformer Self-Attention
 
+        num_repeats = 4
         current_channels = in_channels
         for _ in range(num_repeats):
-            self.res_downsample_blocks.append(nn.Sequential(
-                ResidualBlock(in_channels=current_channels, filters=filters),  # Residual block with in_channels and filters
-                DownsampleBlock(filters=filters)  # Downsample block with filters
-            ))
+            # Add the Residual Block
+            self.residual_blocks.append(ResidualBlock(in_channels=current_channels, filters=filters))
+
+            # Add the Downsample Block
+            self.downsample_blocks.append(DownsampleBlock(filters=filters))
+
+            # Add the LoCI Fusion Block
             self.loci_fusion_blocks.append(LoCIFusionModule(pixel_dim=filters))
-            self.transformer_blocks.append(TransformerWithSelfAttention(pixel_dim=filters))
-            
-            # After downsampling, the number of channels may remain the same, but spatial resolution reduces.
-            current_channels = filters  # Keep filters the same for subsequent layers
 
-        # Define the GAM, residual, and upsampling blocks for decoding
-        self.GAM_blocks = nn.ModuleList()
-        self.residual_blocks = nn.ModuleList()
-        self.upsample_blocks = nn.ModuleList()
+            # Add Transformer Self-Attention Block
+            self.self_attention_blocks.append(TransformerWithSelfAttention(pixel_dim=filters))
 
-        for _ in range(num_repeats):
-            self.GAM_blocks.append(GAMWithAge(filters, age_embedding_dim))  # Global Attention Mechanism (GAM)
-            self.residual_blocks.append(ResidualBlock(in_channels=filters * 2, filters=filters))  # Residual Block with input from concatenation
-            self.upsample_blocks.append(UpsampleBlock(filters=filters))  # Upsample Block with filters
+            # Update the current channels to be the number of filters
+            current_channels = filters
 
-        # Final output convolution
-        self.final_conv = nn.Conv3d(in_channels=filters * 2, out_channels=1, kernel_size=3, padding=1)  # Filters doubled for concatenation
+        # # Define the GAM, residual, and upsampling blocks for decoding
+        # self.GAM_blocks = nn.ModuleList()
+        # self.residual_decoder_blocks = nn.ModuleList()
+        # self.upsample_blocks = nn.ModuleList()
+
+        # for _ in range(num_repeats):
+        #     # Global Attention Mechanism (GAM)
+        #     self.GAM_blocks.append(GAM(filters, age_embedding_dim))
+
+        #     # Residual Block for Decoder with input from concatenation
+        #     self.residual_decoder_blocks.append(ResidualBlock(in_channels=filters * 2, filters=filters))
+
+        #     # Upsample Block for Decoder
+        #     self.upsample_blocks.append(UpsampleBlock(filters=filters))
+
+        # # Final output convolution
+        # self.final_conv = nn.Conv3d(in_channels=filters * 2, out_channels=1, kernel_size=3, padding=1)  # Filters doubled for concatenation
 
     def forward(self, p, t, s, age):
         # Embed the age information
@@ -332,36 +451,120 @@ class DenoisingNetwork(nn.Module):
         t_features = t
         s_features = s
 
-        for i in range(len(self.res_downsample_blocks)):
-            # Apply Residual + Downsample blocks
-            p_features = self.res_downsample_blocks[i](p_features)
-            t_features = self.res_downsample_blocks[i](t_features)
-            s_features = self.res_downsample_blocks[i](s_features)
+        # Sequentially apply Residual, Downsampling, LoCI Fusion, and Transformer Self-Attention blocks
+        for i in range(len(self.residual_blocks)):
+            # Apply Residual Block
+            p_features = self.residual_blocks[i](p_features)
+            s_features = self.residual_blocks[i](s_features)
+
+            # Apply Downsampling
+            p_features = self.downsample_blocks[i](p_features)
+            s_features = self.downsample_blocks[i](s_features)
 
             # Apply LoCI Fusion on preceding and subsequent features
-            fused_p, fused_s = self.loci_fusion_blocks[i](p_features, s_features)
+            _, C_Si = self.loci_fusion_blocks[i](p_features, s_features)
 
-            # Apply TransformerWithSelfAttention to fused features
-            c_fused = self.transformer_blocks[i](fused_p + fused_s)
+            # Apply Transformer Self-Attention to C_Si from subsequent features
+            c_fused = self.self_attention_blocks[i](C_Si)
 
-        # Apply the decoding path: GAM, Residual Block, and Upsample
+        # # Apply the decoding path: GAM, Residual Block, and Upsample
+        # for i in range(len(self.GAM_blocks)):
+        #     # Apply Global Attention Mechanism with Age Embedding
+        #     gam_output = self.GAM_blocks[i](c_fused, age_emb)
+
+        #     # Concatenate noisy target (t_features) with GAM output for this iteration
+        #     concatenated_output = torch.cat([t_features, gam_output], dim=1)
+
+        #     # Apply Residual Block for Decoder
+        #     concatenated_output = self.residual_decoder_blocks[i](concatenated_output)
+
+        #     # Apply Upsample Block for Decoder
+        #     c_fused = self.upsample_blocks[i](concatenated_output)
+
+        # # Final convolution to reconstruct the image
+        # output = self.final_conv(c_fused)
+        return c_fused
+
+class GAMUNet(nn.Module):
+    def __init__(self, input_shape, in_channels=1, filters=64, age_embedding_dim=128, num_repeats=4):
+        super(GAMUNet, self).__init__()
+
+        # Embedding the age information
+        self.age_embedding = AgeEmbedding(embedding_dim=age_embedding_dim)
+
+        # Encoder blocks: Residual Blocks followed by Downsampling
+        self.encoder_residual_blocks = nn.ModuleList()
+        self.encoder_downsample_blocks = nn.ModuleList()
+
+        # Decoder blocks: GAM, Residual Blocks, Upsampling
+        self.GAM_blocks = nn.ModuleList()
+        self.decoder_residual_blocks = nn.ModuleList()
+        self.decoder_upsample_blocks = nn.ModuleList()
+
+        current_channels = in_channels
+        for _ in range(num_repeats):
+            # Encoder Residual Block
+            self.encoder_residual_blocks.append(ResidualBlock(in_channels=current_channels, filters=filters))
+
+            # Encoder Downsampling Block
+            self.encoder_downsample_blocks.append(DownsampleBlock(filters=filters))
+
+            current_channels = filters  # Update current_channels
+
+        for _ in range(num_repeats):
+            # Global Attention Mechanism (GAM)
+            self.GAM_blocks.append(GAM(filters, age_embedding_dim))
+
+            # Residual Block for Decoder with input from concatenation
+            self.decoder_residual_blocks.append(ResidualBlock(in_channels=filters * 2, filters=filters))
+
+            # Upsample Block for Decoder
+            self.decoder_upsample_blocks.append(UpsampleBlock(filters=filters))
+
+        # Final output convolution
+        self.final_conv = nn.Conv3d(in_channels=filters, out_channels=1, kernel_size=3, padding=1)
+
+    def forward(self, t, c_fused, age):
+        # Embed the age information
+        age_emb = self.age_embedding(age)
+
+        # Encoder path
+        t_features = t
+        encoder_outputs = []  # To store encoder outputs for skip connections
+
+        for i in range(len(self.encoder_residual_blocks)):
+            # Apply Residual Block
+            t_features = self.encoder_residual_blocks[i](t_features)
+
+            # Save the features for skip connections
+            encoder_outputs.append(t_features)
+
+            # Apply Downsampling
+            t_features = self.encoder_downsample_blocks[i](t_features)
+
+        # Reverse the encoder outputs for easy access in decoder (since the last encoder output corresponds to the first decoder input)
+        encoder_outputs = encoder_outputs[::-1]  # Reverse the list
+
+        # Decoder path
         for i in range(len(self.GAM_blocks)):
             # Apply Global Attention Mechanism with Age Embedding
             gam_output = self.GAM_blocks[i](c_fused, age_emb)
 
-            # Concatenate noisy target (t_features) with GAM output for this iteration
-            concatenated_output = torch.cat([t_features, gam_output], dim=1)
+            # Retrieve the corresponding encoder output for skip connection
+            skip_connection = encoder_outputs[i]
 
-            # Apply Residual Block
-            concatenated_output = self.residual_blocks[i](concatenated_output)
+            # Concatenate encoder output (skip connection) with GAM output
+            concatenated_output = torch.cat([skip_connection, gam_output], dim=1)  # Concatenate along channel dimension
 
-            # Apply Upsample Block
-            c_fused = self.upsample_blocks[i](concatenated_output)
+            # Apply Residual Block for Decoder
+            concatenated_output = self.decoder_residual_blocks[i](concatenated_output)
+
+            # Apply Upsample Block for Decoder
+            c_fused = self.decoder_upsample_blocks[i](concatenated_output)
 
         # Final convolution to reconstruct the image
         output = self.final_conv(c_fused)
         return output
-
 
 class DenoisingNetworkParallel(nn.Module):
     def __init__(self, input_shape, filters=64, age_embedding_dim=128):
@@ -410,3 +613,123 @@ class DenoisingNetworkParallel(nn.Module):
         output = self.final_conv(reconstructed)
 
         return output
+    
+
+# Define the diffusion model guided by the fusion module
+def ddpm_schedules(beta1, beta2, T):
+    """
+    Returns pre-computed schedules for DDPM sampling, training process.
+    """
+    assert beta1 < beta2 < 1.0, "beta1 and beta2 must be in (0, 1)"
+
+    beta_t = (beta2 - beta1) * torch.arange(0, T + 1, dtype=torch.float32) / T + beta1
+    sqrt_beta_t = torch.sqrt(beta_t)
+    alpha_t = 1 - beta_t
+    log_alpha_t = torch.log(alpha_t)
+    alphabar_t = torch.cumsum(log_alpha_t, dim=0).exp()
+
+    sqrtab = torch.sqrt(alphabar_t)
+    oneover_sqrta = 1 / torch.sqrt(alpha_t)
+
+    sqrtmab = torch.sqrt(1 - alphabar_t)
+    mab_over_sqrtmab_inv = (1 - alpha_t) / sqrtmab
+
+    return {
+        "alpha_t": alpha_t,  # \alpha_t
+        "oneover_sqrta": oneover_sqrta,  # 1/\sqrt{\alpha_t}
+        "sqrt_beta_t": sqrt_beta_t,  # \sqrt{\beta_t}
+        "alphabar_t": alphabar_t,  # \bar{\alpha_t}
+        "sqrtab": sqrtab,  # \sqrt{\bar{\alpha_t}}
+        "sqrtmab": sqrtmab,  # \sqrt{1-\bar{\alpha_t}}
+        "mab_over_sqrtmab": mab_over_sqrtmab_inv,  # (1-\alpha_t)/\sqrt{1-\bar{\alpha_t}}
+    }
+
+
+class DPM(nn.Module):
+    def __init__(self, fusion_model, nn_model, betas, n_T, device, drop_prob=0.1):
+        super(DPM, self).__init__()
+        self.fusion_model = fusion_model
+        self.nn_model = nn_model.to(device)
+
+        # register_buffer allows accessing dictionary produced by ddpm_schedules
+        # e.g. can access self.sqrtab later
+        for k, v in ddpm_schedules(betas[0], betas[1], n_T).items():
+            self.register_buffer(k, v)
+
+        self.n_T = n_T
+        self.device = device
+        self.drop_prob = drop_prob
+        self.loss_mse = nn.MSELoss()
+
+    def forward(self, x, x_prev):
+        """
+        this method is used in training, so samples t and noise randomly
+        """
+
+        c = self.fusion_model(x_prev)
+
+        _ts = torch.randint(1, self.n_T, (x.shape[0],)).to(self.device)  # t ~ Uniform(0, n_T)
+        noise = torch.randn_like(x)  # eps ~ N(0, 1)
+
+        x_t = (
+                self.sqrtab[_ts, None, None, None, None] * x
+                + self.sqrtmab[_ts, None, None, None, None] * noise
+        )  # This is the x_t, which is sqrt(alphabar) x_0 + sqrt(1-alphabar) * eps
+        # We should predict the "error term" from this x_t. Loss is what we return.
+
+        # dropout context with some probability
+        context_mask = torch.bernoulli(torch.zeros(c.shape[0]) + self.drop_prob).to(self.device)
+
+        # return MSE between added noise, and our predicted noise
+        return self.loss_mse(noise, self.nn_model(x_t, c, _ts / self.n_T, context_mask))
+
+    def sample(self, x_prev, device, guide_w=0.0):
+        # we follow the guidance sampling scheme described in 'Classifier-Free Diffusion Guidance'
+        # to make the fwd passes efficient, we concat two versions of the dataset,
+        # one with context_mask=0 and the other context_mask=1
+        # we then mix the outputs with the guidance scale, w
+        # where w>0 means more guidance
+
+        c_i = self.fusion_model(x_prev)
+
+        n_sample = c_i.shape[0]
+        size = c_i.shape[1:]
+
+        x_i = torch.randn(n_sample, *size).to(device)  # x_T ~ N(0, 1), sample initial noise
+
+        # don't drop context at test time
+        context_mask = torch.zeros(c_i.shape[0]).to(device)
+
+        # double the batch
+        c_i = c_i.repeat(2, 1, 1, 1, 1)
+        context_mask = context_mask.repeat(2)
+        context_mask[n_sample:] = 1.  # makes second half of batch context free
+
+        x_i_store = []  # keep track of generated steps in case want to plot something
+        print()
+        for i in range(self.n_T, 0, -1):
+            print(f'sampling timestep {i}', end='\r')
+            t_is = torch.tensor([i / self.n_T]).to(device)
+            t_is = t_is.repeat(n_sample, 1, 1, 1, 1)
+
+            # double batch
+            x_i = x_i.repeat(2, 1, 1, 1, 1)
+            t_is = t_is.repeat(2, 1, 1, 1, 1)
+
+            z = torch.randn(n_sample, *size).to(device) if i > 1 else 0
+
+            # split predictions and compute weighting
+            eps = self.nn_model(x_i, c_i, t_is, context_mask)
+            eps1 = eps[:n_sample]
+            eps2 = eps[n_sample:]
+            eps = (1 + guide_w) * eps1 - guide_w * eps2
+            x_i = x_i[:n_sample]
+            x_i = (
+                    self.oneover_sqrta[i] * (x_i - eps * self.mab_over_sqrtmab[i])
+                    + self.sqrt_beta_t[i] * z
+            )
+            if i % 20 == 0 or i == self.n_T or i < 8:
+                x_i_store.append(x_i.detach().cpu().numpy())
+
+        x_i_store = np.array(x_i_store)
+        return x_i, x_i_store
