@@ -59,7 +59,7 @@ class UpsampleBlock(nn.Module):
 # Global Attention Mechanism (GAM)
 class GAM(nn.Module):
     """ Adapted from: https://github.com/dengbuqi/GAM_Pytorch/blob/main/CAM.py """
-    def __init__(self, in_channels, out_channels, age_embedding_dim, rate=4):
+    def __init__(self, in_channels, out_channels, age_embedding_dim=128, rate=4):
         super().__init__()
         in_channels = int(in_channels)
         out_channels = int(out_channels)
@@ -394,7 +394,7 @@ class CrossAttentionWithAge(nn.Module):
 
 # Fusion for guiding DPM
 class FusionModule(nn.Module):
-    def __init__(self, input_shape, in_channels=1, filters=64, age_embedding_dim=128, num_repeats=4):
+    def __init__(self, in_channels=1, filters=64, age_embedding_dim=128, num_repeats=4):
         super(FusionModule, self).__init__()
 
         # Embedding the age information
@@ -406,7 +406,6 @@ class FusionModule(nn.Module):
         self.loci_fusion_blocks = nn.ModuleList()  # For LoCI Fusion
         self.self_attention_blocks = nn.ModuleList() # For Transformer Self-Attention
 
-        num_repeats = 4
         current_channels = in_channels
         for _ in range(num_repeats):
             # Add the Residual Block
@@ -424,32 +423,16 @@ class FusionModule(nn.Module):
             # Update the current channels to be the number of filters
             current_channels = filters
 
-        # # Define the GAM, residual, and upsampling blocks for decoding
-        # self.GAM_blocks = nn.ModuleList()
-        # self.residual_decoder_blocks = nn.ModuleList()
-        # self.upsample_blocks = nn.ModuleList()
-
-        # for _ in range(num_repeats):
-        #     # Global Attention Mechanism (GAM)
-        #     self.GAM_blocks.append(GAM(filters, age_embedding_dim))
-
-        #     # Residual Block for Decoder with input from concatenation
-        #     self.residual_decoder_blocks.append(ResidualBlock(in_channels=filters * 2, filters=filters))
-
-        #     # Upsample Block for Decoder
-        #     self.upsample_blocks.append(UpsampleBlock(filters=filters))
-
-        # # Final output convolution
-        # self.final_conv = nn.Conv3d(in_channels=filters * 2, out_channels=1, kernel_size=3, padding=1)  # Filters doubled for concatenation
-
-    def forward(self, p, t, s, age):
+    def forward(self, p, s, age):
         # Embed the age information
         age_emb = self.age_embedding(age)
 
-        # Process preceding, target, and subsequent images through the RB+DS stages
+        # Process preceding and subsequent images through the RB+DS stages
         p_features = p
-        t_features = t
         s_features = s
+
+        c_pred_p_list = []
+        c_pred_s_list = []
 
         # Sequentially apply Residual, Downsampling, LoCI Fusion, and Transformer Self-Attention blocks
         for i in range(len(self.residual_blocks)):
@@ -462,31 +445,18 @@ class FusionModule(nn.Module):
             s_features = self.downsample_blocks[i](s_features)
 
             # Apply LoCI Fusion on preceding and subsequent features
-            _, C_Si = self.loci_fusion_blocks[i](p_features, s_features)
+            C_Pi, C_Si = self.loci_fusion_blocks[i](p_features, s_features)
+            c_pred_p_list.append(C_Pi)
+            c_pred_s_list.append(C_Si)
 
-            # Apply Transformer Self-Attention to C_Si from subsequent features
+            # Apply Transformer Self-Attention to fused features (using C_Si or fused features)
             c_fused = self.self_attention_blocks[i](C_Si)
 
-        # # Apply the decoding path: GAM, Residual Block, and Upsample
-        # for i in range(len(self.GAM_blocks)):
-        #     # Apply Global Attention Mechanism with Age Embedding
-        #     gam_output = self.GAM_blocks[i](c_fused, age_emb)
+        return c_fused, c_pred_p_list, c_pred_s_list
 
-        #     # Concatenate noisy target (t_features) with GAM output for this iteration
-        #     concatenated_output = torch.cat([t_features, gam_output], dim=1)
-
-        #     # Apply Residual Block for Decoder
-        #     concatenated_output = self.residual_decoder_blocks[i](concatenated_output)
-
-        #     # Apply Upsample Block for Decoder
-        #     c_fused = self.upsample_blocks[i](concatenated_output)
-
-        # # Final convolution to reconstruct the image
-        # output = self.final_conv(c_fused)
-        return c_fused
 
 class GAMUNet(nn.Module):
-    def __init__(self, input_shape, in_channels=1, filters=64, age_embedding_dim=128, num_repeats=4):
+    def __init__(self, in_channels=1, filters=64, age_embedding_dim=128, num_repeats=4):
         super(GAMUNet, self).__init__()
 
         # Embedding the age information
@@ -646,90 +616,88 @@ def ddpm_schedules(beta1, beta2, T):
 
 
 class DPM(nn.Module):
-    def __init__(self, fusion_model, nn_model, betas, n_T, device, drop_prob=0.1):
+    def __init__(self, fusion_model, nn_model, betas, n_T, device):
         super(DPM, self).__init__()
-        self.fusion_model = fusion_model
+        self.fusion_model = fusion_model.to(device)
         self.nn_model = nn_model.to(device)
 
-        # register_buffer allows accessing dictionary produced by ddpm_schedules
-        # e.g. can access self.sqrtab later
-        for k, v in ddpm_schedules(betas[0], betas[1], n_T).items():
+        # Register buffers for diffusion schedules
+        schedules = ddpm_schedules(betas[0], betas[1], n_T)
+        for k, v in schedules.items():
             self.register_buffer(k, v)
 
         self.n_T = n_T
         self.device = device
-        self.drop_prob = drop_prob
         self.loss_mse = nn.MSELoss()
 
-    def forward(self, x, x_prev):
+    def forward(self, p, t, s, age, lambda_fusion=0.6):
         """
-        this method is used in training, so samples t and noise randomly
+        Training forward pass.
         """
+        batch_size = t.shape[0]
 
-        c = self.fusion_model(x_prev)
+        # Generate random timesteps
+        _ts = torch.randint(1, self.n_T, (batch_size,), device=self.device)
 
-        _ts = torch.randint(1, self.n_T, (x.shape[0],)).to(self.device)  # t ~ Uniform(0, n_T)
-        noise = torch.randn_like(x)  # eps ~ N(0, 1)
+        # Add noise to the target image
+        noise = torch.randn_like(t).to(self.device)
+        sqrtab_t = self.sqrtab[_ts].view(-1, 1, 1, 1, 1)
+        sqrtmab_t = self.sqrtmab[_ts].view(-1, 1, 1, 1, 1)
+        x_t = sqrtab_t * t + sqrtmab_t * noise  # Noisy image
 
-        x_t = (
-                self.sqrtab[_ts, None, None, None, None] * x
-                + self.sqrtmab[_ts, None, None, None, None] * noise
-        )  # This is the x_t, which is sqrt(alphabar) x_0 + sqrt(1-alphabar) * eps
-        # We should predict the "error term" from this x_t. Loss is what we return.
+        # Get fused features and context-aware consistency features from the fusion model
+        c_fused, c_pred_p_list, c_pred_s_list = self.fusion_model(p, s, age)
 
-        # dropout context with some probability
-        context_mask = torch.bernoulli(torch.zeros(c.shape[0]) + self.drop_prob).to(self.device)
+        # Predict the noise using GAMUNet
+        predicted_noise = self.nn_model(x_t, c_fused, age, _ts / self.n_T)
 
-        # return MSE between added noise, and our predicted noise
-        return self.loss_mse(noise, self.nn_model(x_t, c, _ts / self.n_T, context_mask))
+        # Compute diffusion loss
+        l_diff = self.loss_mse(noise, predicted_noise)
 
-    def sample(self, x_prev, device, guide_w=0.0):
-        # we follow the guidance sampling scheme described in 'Classifier-Free Diffusion Guidance'
-        # to make the fwd passes efficient, we concat two versions of the dataset,
-        # one with context_mask=0 and the other context_mask=1
-        # we then mix the outputs with the guidance scale, w
-        # where w>0 means more guidance
+        # Compute fusion loss (average over all levels)
+        l_fusion = 0.0
+        for c_pred_p, c_pred_s in zip(c_pred_p_list, c_pred_s_list):
+            l_fusion += self.loss_mse(c_pred_p, c_pred_s)
+        l_fusion = l_fusion / len(c_pred_p_list)  # Average over levels
 
-        c_i = self.fusion_model(x_prev)
+        # Compute total loss
+        loss = l_diff + lambda_fusion * l_fusion
 
-        n_sample = c_i.shape[0]
-        size = c_i.shape[1:]
+        return loss
 
-        x_i = torch.randn(n_sample, *size).to(device)  # x_T ~ N(0, 1), sample initial noise
+    def sample(self, p, s, age, skip_step=80):
+        """
+        Sampling method to generate the denoised image starting from random noise.
+        Performs denoising with skip steps.
+        """
+        self.nn_model.eval()
+        with torch.no_grad():
+            c_fused, _, _ = self.fusion_model(p, s, age)
 
-        # don't drop context at test time
-        context_mask = torch.zeros(c_i.shape[0]).to(device)
+            n_sample = c_fused.shape[0]
+            size = c_fused.shape[1:]
 
-        # double the batch
-        c_i = c_i.repeat(2, 1, 1, 1, 1)
-        context_mask = context_mask.repeat(2)
-        context_mask[n_sample:] = 1.  # makes second half of batch context free
+            x_i = torch.randn(n_sample, *size).to(self.device)  # x_T ~ N(0, 1)
 
-        x_i_store = []  # keep track of generated steps in case want to plot something
-        print()
-        for i in range(self.n_T, 0, -1):
-            print(f'sampling timestep {i}', end='\r')
-            t_is = torch.tensor([i / self.n_T]).to(device)
-            t_is = t_is.repeat(n_sample, 1, 1, 1, 1)
+            timesteps = list(range(self.n_T, 0, -skip_step))
+            if timesteps[-1] != 0:
+                timesteps.append(0)  # Ensure we reach timestep 0
 
-            # double batch
-            x_i = x_i.repeat(2, 1, 1, 1, 1)
-            t_is = t_is.repeat(2, 1, 1, 1, 1)
+            for i in timesteps:
+                t_is = torch.full((n_sample,), i / self.n_T, device=self.device)
 
-            z = torch.randn(n_sample, *size).to(device) if i > 1 else 0
+                sqrtab_t = self.sqrtab[i]
+                oneover_sqrta_t = self.oneover_sqrta[i]
+                mab_over_sqrtmab_t = self.mab_over_sqrtmab[i]
+                sqrt_beta_t = self.sqrt_beta_t[i]
 
-            # split predictions and compute weighting
-            eps = self.nn_model(x_i, c_i, t_is, context_mask)
-            eps1 = eps[:n_sample]
-            eps2 = eps[n_sample:]
-            eps = (1 + guide_w) * eps1 - guide_w * eps2
-            x_i = x_i[:n_sample]
-            x_i = (
-                    self.oneover_sqrta[i] * (x_i - eps * self.mab_over_sqrtmab[i])
-                    + self.sqrt_beta_t[i] * z
-            )
-            if i % 20 == 0 or i == self.n_T or i < 8:
-                x_i_store.append(x_i.detach().cpu().numpy())
+                z = torch.randn(n_sample, *size).to(self.device) if i > 0 else 0
 
-        x_i_store = np.array(x_i_store)
-        return x_i, x_i_store
+                predicted_noise = self.nn_model(x_i, c_fused, age, t_is)
+
+                x_i = (
+                    oneover_sqrta_t * (x_i - predicted_noise * mab_over_sqrtmab_t)
+                    + sqrt_beta_t * z
+                )
+
+            return x_i

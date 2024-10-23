@@ -11,15 +11,12 @@ import tqdm
 
 def train():
     device = torch.device("cuda")
-    n_epoch = 20
-    batch_size = 3
-    image_size = (32, 128, 128)
-    num_frames = 11
 
-    # DDPM hyperparameters
-    n_T = 400  # 500
-    n_feat = 8  # 128 ok, 256 better (but slower)
-    lrate = 1e-4
+    # DPM hyperparameters
+    n_T = 1000  # Number of diffusion timesteps
+
+    # Set the noise schedule from 1e-4 to 5e-3 linearly over n_T steps
+    betas = (1e-4, 5e-3)
 
     andjela_dir = '/home/andjela/joplin-intra-inter/CP_rigid_trios/CP'
     train_dataset = CP(root_dir=andjela_dir, age_csv=f'{andjela_dir}/trios_sorted_by_age.csv', transfo_type='rigid')
@@ -30,42 +27,16 @@ def train():
     # x_prev_val = x_prev_val.to(device)
 
 
-    fusion_model = FusionModule(input_shape=(1, 256, 256, 105), in_channels=1, filters=64, age_embedding_dim=128, num_repeats=4)
-    nn_model = GAMUNet(in_channels=1, n_feat=n_feat, in_shape=(1, *image_size))
+    fusion_model = FusionModule(in_channels=1, filters=64, age_embedding_dim=128, num_repeats=4)
+    gam_unet = GAMUNet(in_channels=1, age_embedding_dim=128)
 
-    ddpm = DPM(fusion_model=fusion_model, nn_model=nn_model,
-                betas=(1e-4, 0.02), n_T=n_T, device=device, drop_prob=0.1)
-    ddpm.to(device)
+    dpm = DPM(fusion_model=fusion_model, nn_model=gam_unet, betas=betas, n_T=n_T, device=device)
+    dpm.to(device)
 
-    optim = torch.optim.Adam(ddpm.parameters(), lr=lrate)
+    # Call the train_model function to start the training process
+    train_model(dpm, train_loader, epochs=10, lambda_fusion=0.6)
 
-    # for ep in range(n_epoch):
-    #     print(f'epoch {ep}')
-    #     ddpm.train()
-
-    #     # linear lrate decay
-    #     optim.param_groups[0]['lr'] = lrate*(1-ep/n_epoch)
-
-    #     pbar = tqdm(train_loader)
-    #     loss_ema = None
-    #     for x, x_prev in pbar:
-    #         optim.zero_grad()
-    #         x = x.to(device)
-    #         x_prev = x_prev.to(device)
-    #         loss = ddpm(x, x_prev)
-    #         loss.backward()
-    #         if loss_ema is None:
-    #             loss_ema = loss.item()
-    #         else:
-    #             loss_ema = 0.95 * loss_ema + 0.05 * loss.item()
-    #         pbar.set_description(f"loss: {loss_ema:.4f}")
-    #         optim.step()
-
-    #     ddpm.eval()
-    #     with torch.no_grad():
-    #         x_gen, x_gen_store = ddpm.sample(x_prev_val, device, guide_w=0.2)
-    #         np.save(f"{RESULT_DIR}/x_gen_{ep}.npy", x_gen)
-    #         np.save(f"{RESULT_DIR}/x_gen_store_{ep}.npy", x_gen_store)
+    
 # # Register hooks to track memory usage
 # def memory_hook(module, input, output):
 #     print(f"{module.__class__.__name__} | Allocated Memory: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")

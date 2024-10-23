@@ -23,7 +23,7 @@ def total_loss(eps, predicted_eps, c_pred_p, c_pred_s, lambda_fusion=0.6):
 
 
 # Training step function with Accelerator support
-def train_step(model, optimizer, inputs, noise_schedule, lambda_fusion, accelerator=None):
+def train_step(model, optimizer, inputs, accelerator=None, lambda_fusion=0.6):
     """
     Perform a single training step:
     1. Forward pass
@@ -31,16 +31,11 @@ def train_step(model, optimizer, inputs, noise_schedule, lambda_fusion, accelera
     3. Backward pass
     4. Update model weights
     """
-    # Determine the device (use accelerator if available, otherwise fallback to CPU/GPU)
+    # Determine the device
     device = accelerator.device if accelerator else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Move inputs to the selected device and ensure they are float32
     p, t, s, age = [x.to(device).float() for x in inputs]
-
-    # Generate random noise level
-    noise_level = torch.rand(1).item() * (noise_schedule[-1] - noise_schedule[0]) + noise_schedule[0]
-    noisy_t = t + noise_level * torch.randn_like(t).to(device)  # Add noise to target
-    eps = torch.randn_like(t).to(device)  # The random noise component
 
     # Zero out gradients
     optimizer.zero_grad()
@@ -48,16 +43,12 @@ def train_step(model, optimizer, inputs, noise_schedule, lambda_fusion, accelera
     # Forward pass with autocast for mixed precision (only if accelerator is used)
     if accelerator:
         with accelerator.autocast():
-            # Model forward pass
-            predicted_eps, loci_outputs_p, loci_outputs_s = model(p, noisy_t, s, age)
-            predicted_eps = predicted_eps - noisy_t  # Adjust predicted noise
-            loss = total_loss(eps, predicted_eps, loci_outputs_p, loci_outputs_s, lambda_fusion)
+            # Model forward pass (loss is computed inside the model)
+            loss = model(p, t, s, age, lambda_fusion)
         accelerator.backward(loss)
     else:
         # Standard forward pass
-        predicted_eps, loci_outputs_p, loci_outputs_s = model(p, noisy_t, s, age)
-        predicted_eps = predicted_eps - noisy_t  # Adjust predicted noise
-        loss = total_loss(eps, predicted_eps, loci_outputs_p, loci_outputs_s, lambda_fusion)
+        loss = model(p, t, s, age, lambda_fusion)
         loss.backward()
 
     optimizer.step()
@@ -71,7 +62,7 @@ def monitor_data_batch(inputs):
         print(f"Input {i} | Size: {input_tensor.size()} | Memory: {input_tensor.element_size() * input_tensor.nelement() / 1024**2:.2f} MB")
 
 # Main training function
-def train_model(model, train_loader, noise_schedule, epochs=10, lambda_fusion=0.6, accelerator=None):
+def train_model(model, train_loader, epochs=10, lambda_fusion=0.6, accelerator=None):
     """
     Main training loop:
     1. Iterate through the dataset for a given number of epochs
@@ -97,7 +88,7 @@ def train_model(model, train_loader, noise_schedule, epochs=10, lambda_fusion=0.
             monitor_data_batch(inputs)
             
             # Perform a training step
-            loss = train_step(model, optimizer, inputs, noise_schedule, lambda_fusion, accelerator)
+            loss = train_step(model, optimizer, inputs, accelerator=accelerator, lambda_fusion=lambda_fusion)
 
             # Accumulate epoch loss
             epoch_loss += loss.item()
