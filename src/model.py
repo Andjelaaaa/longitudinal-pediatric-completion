@@ -534,11 +534,16 @@ class FusionModule(nn.Module):
             # Optional: Apply convolutional layer to adjust channels
             c_fused = self.channel_projection_layers[i](c_fused)  # Initialize self.channel_projection_layers
 
+            print(f"Projected c_fused | {c_fused.size()}")
+
             # Apply Transformer Self-Attention after reconstructing
             c_fused = self.self_attention_blocks[i](c_fused)
 
+            print(f"Self-Attention block {i} | c_fused: {c_fused.size()}")
+
             # Store c_fused for use in GAMUNet
             c_fused_list.append(c_fused)
+
 
         return c_fused_list, c_pred_p_list, c_pred_s_list
 
