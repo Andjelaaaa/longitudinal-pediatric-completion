@@ -217,7 +217,7 @@ class TransformerWithSelfAttention(nn.Module):
 
         # Compute weighted sum of values
         attn_output = torch.einsum('bhde,bhce->bhcd', attn_probs, v)  # [batch_size, num_heads, channels // num_heads, d*h*w]
-        attn_output = attn_output.view(batch_size, channels, depth, height, width)
+        attn_output = attn_output.reshape(batch_size, channels, depth, height, width)
 
         # Apply output projection
         attn_output = self.out_conv(attn_output)
