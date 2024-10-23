@@ -103,8 +103,12 @@ class GAM(nn.Module):
     def forward(self, x, age_emb):
         b, c, d, h, w = x.shape
 
+        print(f"x shape: {x.shape}")
+        print(f"age_emb shape: {age_emb.shape}")
+
         # Channel Attention
         x_permute = x.permute(0, 2, 3, 4, 1).reshape(b, -1, c)
+        print(f"x_permute shape: {x_permute.shape}")
         x_att_permute = self.linear2(self.relu(self.linear1(x_permute))).reshape(b, d, h, w, c)
         x_channel_att = x_att_permute.permute(0, 4, 1, 2, 3)
         x = x * x_channel_att
@@ -119,7 +123,7 @@ class GAM(nn.Module):
         x_spatial_att = self.sigmoid(self.norm2(self.conv2(x_spatial_att)))
         out = x * x_spatial_att
 
-        return out
+        return out  
 
 # Cross-Attention Module
 class CrossAttention(nn.Module):
@@ -602,6 +606,8 @@ class GAMUNet(nn.Module):
         self.encoder_residual_blocks = nn.ModuleList()
         self.encoder_downsample_blocks = nn.ModuleList()
 
+        c_fused_channels = 32  # Initial number of channels for c_fused
+
         # Decoder blocks: GAM, Residual Blocks, Upsampling
         self.GAM_blocks = nn.ModuleList()
         self.decoder_residual_blocks = nn.ModuleList()
@@ -619,7 +625,7 @@ class GAMUNet(nn.Module):
 
         for _ in range(num_repeats):
             # Global Attention Mechanism (GAM)
-            self.GAM_blocks.append(GAM(filters, filters, age_embedding_dim))
+            self.GAM_blocks.append(GAM(in_channels=c_fused_channels, out_channels=filters, age_embedding_dim=age_embedding_dim))
 
             # Residual Block for Decoder with input from concatenation
             self.decoder_residual_blocks.append(ResidualBlock(in_channels=filters * 2, filters=filters))
@@ -672,14 +678,14 @@ class GAMUNet(nn.Module):
             c_fused_level = c_fused_list[i]
             skip_connection = encoder_outputs[i]
 
-            # Compute the target spatial dimensions for c_fused_level
-            # Since GAM halves the dimensions, we need to upsample c_fused_level to match skip_connection dimensions
+            # Upsample c_fused_level
             target_spatial_dims = skip_connection.shape[2:]
-
-            # Upsample c_fused_level to match the spatial dimensions of the skip_connection
             c_fused_upsampled = F.interpolate(
                 c_fused_level, size=target_spatial_dims, mode='trilinear', align_corners=False
             )
+
+            # Adjust channels of c_fused_upsampled if necessary
+            c_fused_upsampled = self.c_fused_conv_layers[i](c_fused_upsampled)
 
             # Apply Global Attention Mechanism with Age Embedding
             gam_output = self.GAM_blocks[i](c_fused_upsampled, age_emb)
