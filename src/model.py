@@ -684,9 +684,6 @@ class GAMUNet(nn.Module):
                 c_fused_level, size=target_spatial_dims, mode='trilinear', align_corners=False
             )
 
-            # Adjust channels of c_fused_upsampled if necessary
-            c_fused_upsampled = self.c_fused_conv_layers[i](c_fused_upsampled)
-
             # Apply Global Attention Mechanism with Age Embedding
             gam_output = self.GAM_blocks[i](c_fused_upsampled, age_emb)
 
