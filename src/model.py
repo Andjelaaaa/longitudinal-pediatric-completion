@@ -627,6 +627,9 @@ class GAMUNet(nn.Module):
             # Retrieve the corresponding encoder output for skip connection
             skip_connection = encoder_outputs[i]
 
+            print(f"Skip connection shape: {skip_connection.shape}")
+            print(f"GAM output shape: {gam_output.shape}")
+
             # Concatenate encoder output (skip connection) with GAM output
             concatenated_output = torch.cat([skip_connection, gam_output], dim=1)  # Concatenate along channel dimension
 
