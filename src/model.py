@@ -188,9 +188,9 @@ class TransformerWithSelfAttention(nn.Module):
             nn.Conv3d(ff_dim, in_channels, kernel_size=1)
         )
 
-        # Layer normalization
-        self.norm1 = nn.LayerNorm([in_channels, 1, 1, 1])
-        self.norm2 = nn.LayerNorm([in_channels, 1, 1, 1])
+        # Adjust LayerNorm to normalize over channels
+        self.norm1 = nn.LayerNorm(in_channels)
+        self.norm2 = nn.LayerNorm(in_channels)
 
         self.dropout = nn.Dropout(dropout)
 
@@ -222,13 +222,25 @@ class TransformerWithSelfAttention(nn.Module):
         # Apply output projection
         attn_output = self.out_conv(attn_output)
         x = residual + self.dropout(attn_output)
+
+        # Permute x to [batch_size, depth, height, width, channels]
+        x = x.permute(0, 2, 3, 4, 1)
+
+        # Apply LayerNorm over channels
         x = self.norm1(x)
+
+        # Permute back to [batch_size, channels, depth, height, width]
+        x = x.permute(0, 4, 1, 2, 3)
 
         # Feed-forward network
         residual = x
         x = self.ffn(x)
         x = residual + self.dropout(x)
+
+        # Repeat LayerNorm
+        x = x.permute(0, 2, 3, 4, 1)
         x = self.norm2(x)
+        x = x.permute(0, 4, 1, 2, 3)
 
         return x
 
