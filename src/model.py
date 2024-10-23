@@ -419,24 +419,31 @@ class CrossAttentionWithAge(nn.Module):
         attended_features = torch.matmul(weights, v)
         return attended_features + pixel_features  # Residual connection
 
-def reconstruct_from_patches(c_fused, num_patches_d, num_patches_h, num_patches_w, patch_size, batch_size):
-    # c_fused: [seq_len, batch_size, embed_dim]
-    seq_len = c_fused.shape[0]
-    embedding_dim = c_fused.shape[2]
+def reconstruct_from_patches(c_fused, num_patches_d, num_patches_h, num_patches_w, patch_size, batch_size, channels):
+    # c_fused: [seq_len, batch_size, embedding_dim], embedding_dim = channels * (patch_size ** 3)
+    seq_len, batch_size, embedding_dim = c_fused.shape
+    assert embedding_dim == channels * (patch_size ** 3), "Embedding dimension does not match expected size"
 
-    # Reshape to [num_patches_d, num_patches_h, num_patches_w, batch_size, embed_dim]
+    # Reshape to [num_patches_d, num_patches_h, num_patches_w, batch_size, embedding_dim]
     c_fused = c_fused.view(num_patches_d, num_patches_h, num_patches_w, batch_size, embedding_dim)
-    # Permute to [batch_size, embedding_dim, num_patches_d, num_patches_h, num_patches_w]
-    c_fused = c_fused.permute(3, 4, 0, 1, 2)
-    # Reshape to [batch_size, embedding_dim, depth, height, width]
+    # Permute to [batch_size, num_patches_d, num_patches_h, num_patches_w, embedding_dim]
+    c_fused = c_fused.permute(3, 0, 1, 2, 4)
+    # Reshape embedding_dim back to [channels, patch_size ** 3]
+    c_fused = c_fused.view(batch_size, num_patches_d, num_patches_h, num_patches_w, channels, patch_size ** 3)
+    # Reshape patch_size ** 3 back to (patch_size, patch_size, patch_size)
+    c_fused = c_fused.view(batch_size, num_patches_d, num_patches_h, num_patches_w, channels, patch_size, patch_size, patch_size)
+    # Rearrange to get back to [batch_size, channels, depth, height, width]
+    c_fused = c_fused.permute(0, 4, 1, 5, 2, 6, 3, 7)
+    # Reshape to [batch_size, channels, depth, height, width]
     c_fused = c_fused.contiguous().view(
         batch_size,
-        embedding_dim,
+        channels,
         num_patches_d * patch_size,
         num_patches_h * patch_size,
         num_patches_w * patch_size,
     )
     return c_fused
+
 
 # Fusion for guiding DPM
 class FusionModule(nn.Module):
@@ -452,6 +459,7 @@ class FusionModule(nn.Module):
         self.downsample_blocks = nn.ModuleList() # For Downsampling
         self.loci_fusion_blocks = nn.ModuleList()  # For LoCI Fusion
         self.self_attention_blocks = nn.ModuleList() # For Transformer Self-Attention
+        self.channel_projection_layers = nn.ModuleList()
 
         current_channels = in_channels
         for _ in range(num_repeats):
@@ -463,6 +471,9 @@ class FusionModule(nn.Module):
 
             # Add the LoCI Fusion Block
             self.loci_fusion_blocks.append(LoCIFusionModule(pixel_dim=filters, num_heads=8, patch_size=self.patch_size))
+
+            # Add the LoCI Fusion Block
+            self.channel_projection_layers.append(nn.Conv3d(in_channels=current_channels, out_channels=filters, kernel_size=1))
 
             # Add Transformer Self-Attention Block
             self.self_attention_blocks.append(TransformerWithSelfAttention(pixel_dim=filters))
@@ -483,6 +494,7 @@ class FusionModule(nn.Module):
         c_fused_list = []  # List to store c_fused at each level
 
         batch_size = p.shape[0]
+        channels = self.filters 
 
         for i in range(len(self.residual_blocks)):
             # Apply Residual Block
@@ -502,13 +514,16 @@ class FusionModule(nn.Module):
             c_pred_p_list.append(C_Pi)
             c_pred_s_list.append(C_Si)
 
-            # Apply Transformer Self-Attention
-            c_fused = self.self_attention_blocks[i](C_Si)
-
-            # Reconstruct c_fused back to spatial dimensions
+            # Reconstruct c_fused from patches
             c_fused = reconstruct_from_patches(
-                c_fused, num_patches_d, num_patches_h, num_patches_w, self.patch_size, batch_size
+                C_Si, num_patches_d, num_patches_h, num_patches_w, self.patch_size, batch_size, channels
             )
+
+            # Optional: Apply convolutional layer to adjust channels
+            c_fused = self.channel_projection_layers[i](c_fused)  # Initialize self.channel_projection_layers
+
+            # Apply Transformer Self-Attention after reconstructing
+            c_fused = self.self_attention_blocks[i](c_fused)
 
             # Store c_fused for use in GAMUNet
             c_fused_list.append(c_fused)
