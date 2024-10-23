@@ -2,6 +2,25 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+import math
+
+class SinusoidalTimeEmbedding(nn.Module):
+    def __init__(self, embedding_dim):
+        super(SinusoidalTimeEmbedding, self).__init__()
+        self.embedding_dim = embedding_dim
+
+    def forward(self, t):
+        """
+        Compute sinusoidal embeddings for time steps.
+        t: Tensor of shape [batch_size], values between 0 and 1.
+        """
+        device = t.device
+        half_dim = self.embedding_dim // 2
+        emb = math.log(10000) / (half_dim - 1)
+        emb = torch.exp(torch.arange(half_dim, device=device) * -emb)
+        emb = t.unsqueeze(1) * emb.unsqueeze(0)
+        emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=1)
+        return emb  # Shape: [batch_size, embedding_dim]
 
 # Age Embedding
 class AgeEmbedding(nn.Module):
@@ -521,11 +540,18 @@ class FusionModule(nn.Module):
 
 
 class GAMUNet(nn.Module):
-    def __init__(self, in_channels=1, filters=64, age_embedding_dim=128, num_repeats=4):
+    def __init__(self, in_channels=1, filters=64, age_embedding_dim=128, time_embedding_dim=128, num_repeats=4):
         super(GAMUNet, self).__init__()
 
-        # Embedding the age information
+        # Embedding the age and time information
         self.age_embedding = AgeEmbedding(embedding_dim=age_embedding_dim)
+        self.time_embedding = SinusoidalTimeEmbedding(embedding_dim=time_embedding_dim)
+
+        # Total embedding dimension
+        self.total_embedding_dim = age_embedding_dim + time_embedding_dim
+
+        # Initial convolution to incorporate embeddings
+        self.initial_conv = nn.Conv3d(in_channels + self.total_embedding_dim, filters, kernel_size=3, padding=1)
 
         # Encoder blocks: Residual Blocks followed by Downsampling
         self.encoder_residual_blocks = nn.ModuleList()
@@ -536,7 +562,7 @@ class GAMUNet(nn.Module):
         self.decoder_residual_blocks = nn.ModuleList()
         self.decoder_upsample_blocks = nn.ModuleList()
 
-        current_channels = in_channels
+        current_channels = filters
         for _ in range(num_repeats):
             # Encoder Residual Block
             self.encoder_residual_blocks.append(ResidualBlock(in_channels=current_channels, filters=filters))
@@ -548,7 +574,7 @@ class GAMUNet(nn.Module):
 
         for _ in range(num_repeats):
             # Global Attention Mechanism (GAM)
-            self.GAM_blocks.append(GAM(filters, age_embedding_dim))
+            self.GAM_blocks.append(GAM(filters, filters, age_embedding_dim))
 
             # Residual Block for Decoder with input from concatenation
             self.decoder_residual_blocks.append(ResidualBlock(in_channels=filters * 2, filters=filters))
@@ -556,28 +582,41 @@ class GAMUNet(nn.Module):
             # Upsample Block for Decoder
             self.decoder_upsample_blocks.append(UpsampleBlock(filters=filters))
 
-        # Final output convolution
+        # Final output convolution to predict the noise
         self.final_conv = nn.Conv3d(in_channels=filters, out_channels=1, kernel_size=3, padding=1)
 
-    def forward(self, t, c_fused, age):
-        # Embed the age information
-        age_emb = self.age_embedding(age)
+    def forward(self, t_input, c_fused, age, t):
+        # Embed the age and time information
+        age_emb = self.age_embedding(age)  # Shape: [batch_size, age_embedding_dim]
+        time_emb = self.time_embedding(t)  # Shape: [batch_size, time_embedding_dim]
+
+        # Combine embeddings
+        emb = torch.cat([age_emb, time_emb], dim=-1)  # Shape: [batch_size, total_embedding_dim]
+
+        # Reshape embeddings to match spatial dimensions
+        emb = emb[:, :, None, None, None]  # Shape: [batch_size, total_embedding_dim, 1, 1, 1]
+        emb = emb.expand(-1, -1, t_input.shape[2], t_input.shape[3], t_input.shape[4])  # Match spatial dimensions
+
+        # Concatenate embeddings with t_input
+        x = torch.cat([t_input, emb], dim=1)  # Concatenate along channel dimension
+
+        # Initial convolution
+        x = self.initial_conv(x)
 
         # Encoder path
-        t_features = t
         encoder_outputs = []  # To store encoder outputs for skip connections
 
         for i in range(len(self.encoder_residual_blocks)):
             # Apply Residual Block
-            t_features = self.encoder_residual_blocks[i](t_features)
+            x = self.encoder_residual_blocks[i](x)
 
             # Save the features for skip connections
-            encoder_outputs.append(t_features)
+            encoder_outputs.append(x)
 
             # Apply Downsampling
-            t_features = self.encoder_downsample_blocks[i](t_features)
+            x = self.encoder_downsample_blocks[i](x)
 
-        # Reverse the encoder outputs for easy access in decoder (since the last encoder output corresponds to the first decoder input)
+        # Reverse the encoder outputs for easy access in decoder
         encoder_outputs = encoder_outputs[::-1]  # Reverse the list
 
         # Decoder path
@@ -595,11 +634,12 @@ class GAMUNet(nn.Module):
             concatenated_output = self.decoder_residual_blocks[i](concatenated_output)
 
             # Apply Upsample Block for Decoder
-            c_fused = self.decoder_upsample_blocks[i](concatenated_output)
+            x = self.decoder_upsample_blocks[i](concatenated_output)
 
-        # Final convolution to reconstruct the image
-        output = self.final_conv(c_fused)
-        return output
+        # Final convolution to predict the noise
+        predicted_noise = self.final_conv(x)
+        return predicted_noise
+
 
 class DenoisingNetworkParallel(nn.Module):
     def __init__(self, input_shape, filters=64, age_embedding_dim=128):
