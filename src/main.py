@@ -31,7 +31,7 @@ def train():
     # x_prev_val = x_prev_val.to(device)
 
 
-    fusion_model = FusionModule(in_channels=1, filters=64, age_embedding_dim=128, num_repeats=4)
+    fusion_model = FusionModule(in_channels=1, filters=64, age_embedding_dim=128, num_repeats=2)
     gam_unet = GAMUNet(in_channels=1, age_embedding_dim=128)
 
     dpm = DPM(fusion_model=fusion_model, nn_model=gam_unet, betas=betas, n_T=n_T, device=device)
