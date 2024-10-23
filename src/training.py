@@ -77,9 +77,9 @@ def train_model(model, train_loader, epochs=10, lambda_fusion=0.6, accelerator=N
         model, optimizer, train_loader = accelerator.prepare(model, optimizer, train_loader)
 
     # Initialize WandB for tracking metrics (only on the main process)
-    if accelerator is None or accelerator.is_main_process:
-        wandb.init(project="long-ped-comp", entity="adimitri")
-        wandb.watch(model, log="all")
+    # if accelerator is None or accelerator.is_main_process:
+    #     wandb.init(project="long-ped-comp", entity="adimitri")
+    #     wandb.watch(model, log="all")
 
     for epoch in range(epochs):
         print(f"Epoch {epoch + 1}/{epochs}")
@@ -97,12 +97,12 @@ def train_model(model, train_loader, epochs=10, lambda_fusion=0.6, accelerator=N
             # Log step-wise loss (only on main process)
             if step % 10 == 0 and (accelerator is None or accelerator.is_main_process):
                 print(f"Step {step}, Loss: {loss.item()}")
-                wandb.log({"batch_loss": loss.item(), "epoch": epoch + 1})
+                # wandb.log({"batch_loss": loss.item(), "epoch": epoch + 1})
 
         # Log epoch loss
         epoch_loss /= len(train_loader)
-        if accelerator is None or accelerator.is_main_process:
-            wandb.log({"epoch_loss": epoch_loss, "epoch": epoch + 1})
+        # if accelerator is None or accelerator.is_main_process:
+            # wandb.log({"epoch_loss": epoch_loss, "epoch": epoch + 1})
 
     # Save the model state (only on main process)
     if accelerator is None or accelerator.is_main_process:
