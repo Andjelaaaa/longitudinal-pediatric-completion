@@ -262,13 +262,9 @@ def create_patches(x, patch_size):
 class LoCIFusionModule(nn.Module):
     def __init__(self, pixel_dim, num_heads=8, patch_size=4):
         super(LoCIFusionModule, self).__init__()
-        self.num_layers = 3  # Number of cross-attention layers
         self.patch_size = patch_size
         self.embed_dim = pixel_dim * (patch_size ** 3)
         self.num_heads = num_heads
-
-        # Projection layer (optional, you can adjust the embedding dimension if needed)
-        self.projection = nn.Linear(self.embed_dim, self.embed_dim)
 
         self.cross_attention_layers = nn.ModuleList()
         self.layer_norms_p = nn.ModuleList()
@@ -300,12 +296,11 @@ class LoCIFusionModule(nn.Module):
                 )
             )
 
+        # Projection layer to reduce embedding dimension back to pixel_dim
+        self.projection = nn.Linear(self.embed_dim, pixel_dim)
+
     def forward(self, p_features, s_features):
         # p_features and s_features: [seq_len, batch_size, embed_dim]
-        # Optionally project the patches to a different embedding dimension
-        # p_features = self.projection(p_features)
-        # s_features = self.projection(s_features)
-
         for i in range(self.num_layers):
             # Cross-attention from p to s
             attn_output_p, _ = self.cross_attention_layers[i](p_features, s_features, s_features)
@@ -318,10 +313,12 @@ class LoCIFusionModule(nn.Module):
             s_features = s_features + self.feed_forward_s[i](s_features)
 
         # After LoCI fusion, obtain context-aware consistency features
-        C_Pi = p_features  # [seq_len, batch_size, embed_dim]
-        C_Si = s_features  # [seq_len, batch_size, embed_dim]
+        # Project back to pixel_dim
+        C_Pi = self.projection(p_features)  # [seq_len, batch_size, pixel_dim]
+        C_Si = self.projection(s_features)  # [seq_len, batch_size, pixel_dim]
 
         return C_Pi, C_Si
+
 
 
 
