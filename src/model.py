@@ -177,6 +177,7 @@ class TransformerWithSelfAttention(nn.Module):
 
     def forward(self, x):
         # Reshape the 5D tensor [batch_size, channels, depth, height, width] to 3D tensor [batch_size, num_pixels, channels]
+        print('SIZE OF X:', x.size())
         batch_size, channels, depth, height, width = x.size()
         print('DIMENSIONS:', batch_size, channels, depth, height, width)
         x_reshaped = x.view(batch_size, channels, -1).permute(2, 0, 1)  # [num_pixels, batch_size, channels]
