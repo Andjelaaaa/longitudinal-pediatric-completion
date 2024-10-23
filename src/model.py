@@ -166,46 +166,71 @@ class CrossAttention(nn.Module):
         return attended_features + pixel_features
 
 class TransformerWithSelfAttention(nn.Module):
-    """
-    Transformer Encoder block with self-attention and feed-forward layers.
-    Expects input of shape [seq_len, batch_size, embed_dim].
-    """
-    def __init__(self, pixel_dim, ff_dim=2048, num_heads=8, dropout=0.1):
+    def __init__(self, in_channels, ff_dim=2048, num_heads=8, dropout=0.1):
         super(TransformerWithSelfAttention, self).__init__()
+        self.in_channels = in_channels
+        self.num_heads = num_heads
+        self.embed_dim = in_channels
+        self.ff_dim = ff_dim
 
-        # Multi-Head Self-Attention
-        self.self_attention = nn.MultiheadAttention(embed_dim=pixel_dim, num_heads=num_heads, dropout=dropout)
+        # Convolutional layers for query, key, and value projections
+        self.q_conv = nn.Conv3d(in_channels, in_channels, kernel_size=1)
+        self.k_conv = nn.Conv3d(in_channels, in_channels, kernel_size=1)
+        self.v_conv = nn.Conv3d(in_channels, in_channels, kernel_size=1)
 
-        # Feed-Forward Network (FFN) with two linear layers and ReLU in between
+        # Output projection
+        self.out_conv = nn.Conv3d(in_channels, in_channels, kernel_size=1)
+
+        # Feed-forward network
         self.ffn = nn.Sequential(
-            nn.Linear(pixel_dim, ff_dim),
+            nn.Conv3d(in_channels, ff_dim, kernel_size=1),
             nn.ReLU(),
-            nn.Linear(ff_dim, pixel_dim)
+            nn.Conv3d(ff_dim, in_channels, kernel_size=1)
         )
 
-        # Layer Normalization
-        self.norm1 = nn.LayerNorm(pixel_dim)
-        self.norm2 = nn.LayerNorm(pixel_dim)
+        # Layer normalization
+        self.norm1 = nn.LayerNorm([in_channels, 1, 1, 1])
+        self.norm2 = nn.LayerNorm([in_channels, 1, 1, 1])
 
-        # Dropout for regularization
-        self.dropout1 = nn.Dropout(dropout)
-        self.dropout2 = nn.Dropout(dropout)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         """
-        x: Tensor of shape [seq_len, batch_size, embed_dim]
+        x: Tensor of shape [batch_size, channels, depth, height, width]
         """
-        # Self-Attention with residual connection and layer normalization
-        attn_output, _ = self.self_attention(x, x, x)
-        x = x + self.dropout1(attn_output)  # Residual connection
+        residual = x
+
+        # Compute query, key, and value
+        q = self.q_conv(x)  # [batch_size, channels, depth, height, width]
+        k = self.k_conv(x)
+        v = self.v_conv(x)
+
+        # Reshape for multi-head attention
+        batch_size, channels, depth, height, width = q.shape
+        q = q.view(batch_size, self.num_heads, channels // self.num_heads, depth * height * width)
+        k = k.view(batch_size, self.num_heads, channels // self.num_heads, depth * height * width)
+        v = v.view(batch_size, self.num_heads, channels // self.num_heads, depth * height * width)
+
+        # Compute attention scores
+        attn_scores = torch.einsum('bhcd,bhce->bhde', q, k) / (channels // self.num_heads) ** 0.5  # [batch_size, num_heads, d*h*w, d*h*w]
+        attn_probs = F.softmax(attn_scores, dim=-1)
+
+        # Compute weighted sum of values
+        attn_output = torch.einsum('bhde,bhce->bhcd', attn_probs, v)  # [batch_size, num_heads, channels // num_heads, d*h*w]
+        attn_output = attn_output.view(batch_size, channels, depth, height, width)
+
+        # Apply output projection
+        attn_output = self.out_conv(attn_output)
+        x = residual + self.dropout(attn_output)
         x = self.norm1(x)
 
-        # Feed-Forward Network with residual connection and layer normalization
-        ffn_output = self.ffn(x)
-        x = x + self.dropout2(ffn_output)  # Residual connection
+        # Feed-forward network
+        residual = x
+        x = self.ffn(x)
+        x = residual + self.dropout(x)
         x = self.norm2(x)
 
-        return x  # Output shape: [seq_len, batch_size, embed_dim]
+        return x
 
 
 # Self-Attention Module (SA)
