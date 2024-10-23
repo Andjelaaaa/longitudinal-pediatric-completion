@@ -532,9 +532,9 @@ class FusionModule(nn.Module):
             print(f"Reconstructed c_fused | {c_fused.size()}")
 
             # Optional: Apply convolutional layer to adjust channels
-            c_fused = self.channel_projection_layers[i](c_fused)  # Initialize self.channel_projection_layers
+            # c_fused = self.channel_projection_layers[i](c_fused)  # Initialize self.channel_projection_layers
 
-            print(f"Projected c_fused | {c_fused.size()}")
+            # print(f"Projected c_fused | {c_fused.size()}")
 
             # Apply Transformer Self-Attention after reconstructing
             c_fused = self.self_attention_blocks[i](c_fused)
