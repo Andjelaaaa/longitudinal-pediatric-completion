@@ -81,7 +81,10 @@ class GAM(nn.Module):
     def __init__(self, in_channels, out_channels, age_embedding_dim=128, rate=4):
         super().__init__()
         in_channels = int(in_channels)
-        out_channels = int(out_channels)
+        if out_channels is None:
+            out_channels = in_channels
+        else:
+            out_channels = int(out_channels)
         inchannel_rate = int(in_channels / rate)
 
         # Channel Attention Components
@@ -627,7 +630,8 @@ class GAMUNet(nn.Module):
 
         for _ in range(num_repeats):
             # Global Attention Mechanism (GAM)
-            self.GAM_blocks.append(GAM(in_channels=c_fused_channels, out_channels=filters, age_embedding_dim=age_embedding_dim))
+            self.GAM_blocks.append(GAM(in_channels=c_fused_channels, out_channels=c_fused_channels, age_embedding_dim=age_embedding_dim))
+
 
             # Residual Block for Decoder with input from concatenation
             self.decoder_residual_blocks.append(ResidualBlock(in_channels=filters * 2, filters=filters))
