@@ -503,7 +503,7 @@ class FusionModule(nn.Module):
             self.channel_projection_layers.append(nn.Conv3d(in_channels=current_channels, out_channels=filters, kernel_size=1))
 
             # Add Transformer Self-Attention Block
-            self.self_attention_blocks.append(TransformerWithSelfAttention(in_channels=current_channels))
+            self.self_attention_blocks.append(TransformerWithSelfAttention(in_channels=filters))
 
             # Update the current channels to be the number of filters
             current_channels = filters
