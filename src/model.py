@@ -502,23 +502,33 @@ class FusionModule(nn.Module):
             p_features = self.residual_blocks[i](p_features)
             s_features = self.residual_blocks[i](s_features)
 
+            print(f"Residual block {i} | p_features: {p_features.size()} | s_features: {s_features.size()}")
+
             # Apply Downsampling
             p_features = self.downsample_blocks[i](p_features)
             s_features = self.downsample_blocks[i](s_features)
 
+            print(f"Downsample block {i} | p_features: {p_features.size()} | s_features: {s_features.size()}")
+
             # Create patches
             p_patches, num_patches_d, num_patches_h, num_patches_w = create_patches(p_features, self.patch_size)
             s_patches, _, _, _ = create_patches(s_features, self.patch_size)
+
+            print(f"Patches | p_patches: {p_patches.size()} | s_patches: {s_patches.size()}")
 
             # Apply LoCI Fusion
             C_Pi, C_Si = self.loci_fusion_blocks[i](p_patches, s_patches)
             c_pred_p_list.append(C_Pi)
             c_pred_s_list.append(C_Si)
 
+            print(f"LoCI Fusion block {i} | C_Pi: {C_Pi.size()} | C_Si: {C_Si.size()}")
+
             # Reconstruct c_fused from patches
             c_fused = reconstruct_from_patches(
                 C_Si, num_patches_d, num_patches_h, num_patches_w, self.patch_size, batch_size, channels
             )
+
+            print(f"Reconstructed c_fused | {c_fused.size()}")
 
             # Optional: Apply convolutional layer to adjust channels
             c_fused = self.channel_projection_layers[i](c_fused)  # Initialize self.channel_projection_layers
