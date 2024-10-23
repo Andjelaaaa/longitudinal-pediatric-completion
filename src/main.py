@@ -23,7 +23,7 @@ def train():
     # andjela_dir = '/home/andjela/joplin-intra-inter/CP_rigid_trios/CP'
     # train_dataset = CP(root_dir=andjela_dir, age_csv=f'{andjela_dir}/trios_sorted_by_age.csv', transfo_type='rigid')
     romane_dir = '/home/GRAMES.POLYMTL.CA/andim/joplin-intra-inter/CP_rigid_trios/CP'
-    train_dataset = CP(root_dir=romane_dir, voxel_size=(7, 7, 7), age_csv=f'{romane_dir}/trios_sorted_by_age.csv', transfo_type='rigid')
+    train_dataset = CP(root_dir=romane_dir, voxel_size=(10, 10, 10), age_csv=f'{romane_dir}/trios_sorted_by_age.csv', transfo_type='rigid')
     train_loader = DataLoader(train_dataset, batch_size=1, shuffle=True, pin_memory=True, num_workers=5)
 
     # valid_loader = DataLoader(ACDCDataset(data_dir="data", split="val"), batch_size=batch_size, shuffle=False, num_workers=1)
