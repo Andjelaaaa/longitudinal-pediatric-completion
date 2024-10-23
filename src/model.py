@@ -232,84 +232,44 @@ class SelfAttention(nn.Module):
         scores = torch.matmul(q, k.transpose(-2, -1)) / self.scale
         weights = F.softmax(scores, dim=-1)
         print('SHAPE of self-att:', torch.matmul(weights, v).shape, pixel_features.shape)
-        return torch.matmul(weights, v) + pixel_features  # Residual connection
+        return torch.matmul(weights, v) + pixel_features  # Residual connection 
 
-# LoCI Fusion Module
-class LoCIFusionModuleFIRST(nn.Module):
-    def __init__(self, pixel_dim, num_heads=8):
-        super(LoCIFusionModule, self).__init__()
-        self.num_layers = 3  # Number of cross-attention layers
-        self.cross_attention_layers = nn.ModuleList()
-        self.layer_norms_p = nn.ModuleList()
-        self.layer_norms_s = nn.ModuleList()
-        self.feed_forward_p = nn.ModuleList()
-        self.feed_forward_s = nn.ModuleList()
+def create_patches(x, patch_size):
+    # x: [batch_size, channels, depth, height, width]
+    batch_size, channels, depth, height, width = x.shape
 
-        for _ in range(self.num_layers):
-            # Cross-attention layers for p_features and s_features
-            self.cross_attention_layers.append(
-                nn.MultiheadAttention(embed_dim=pixel_dim, num_heads=num_heads)
-            )
-            # Layer Normalization
-            self.layer_norms_p.append(nn.LayerNorm(pixel_dim))
-            self.layer_norms_s.append(nn.LayerNorm(pixel_dim))
-            # Feed-forward networks
-            self.feed_forward_p.append(
-                nn.Sequential(
-                    nn.Linear(pixel_dim, pixel_dim),
-                    nn.ReLU(),
-                    nn.Linear(pixel_dim, pixel_dim),
-                )
-            )
-            self.feed_forward_s.append(
-                nn.Sequential(
-                    nn.Linear(pixel_dim, pixel_dim),
-                    nn.ReLU(),
-                    nn.Linear(pixel_dim, pixel_dim),
-                )
-            )
+    # Calculate number of patches along each dimension
+    num_patches_d = depth // patch_size
+    num_patches_h = height // patch_size
+    num_patches_w = width // patch_size
 
-    def forward(self, p_features, s_features):
-        # Reshape to [seq_len, batch_size, embed_dim] for MultiheadAttention
-        batch_size, channels, D, H, W = p_features.shape
-        seq_len = D * H * W
+    # Reshape x into patches
+    x = x[:, :, :num_patches_d * patch_size, :num_patches_h * patch_size, :num_patches_w * patch_size]
+    x = x.unfold(2, patch_size, patch_size).unfold(3, patch_size, patch_size).unfold(4, patch_size, patch_size)
+    # x shape: [batch_size, channels, num_patches_d, num_patches_h, num_patches_w, patch_size, patch_size, patch_size]
 
-        # Flatten spatial dimensions and permute
-        p_features = p_features.view(batch_size, channels, seq_len).permute(2, 0, 1)
-        s_features = s_features.view(batch_size, channels, seq_len).permute(2, 0, 1)
+    # Move the patches to the batch dimension and flatten them
+    x = x.contiguous().view(batch_size, channels, -1, patch_size ** 3)
+    # x shape: [batch_size, channels, num_patches, patch_size ** 3]
 
-        for i in range(self.num_layers):
-            # Cross-attention from p to s
-            # Query: p_features, Key/Value: s_features
-            attn_output_p, _ = self.cross_attention_layers[i](p_features, s_features, s_features)
-            p_features = self.layer_norms_p[i](p_features + attn_output_p)
-            p_features = p_features + self.feed_forward_p[i](p_features)
+    x = x.permute(2, 0, 1, 3)  # [num_patches, batch_size, channels, patch_size ** 3]
+    x = x.contiguous().view(-1, batch_size, channels * patch_size ** 3)
+    # x shape: [seq_len, batch_size, embed_dim], where seq_len = num_patches_d * num_patches_h * num_patches_w
 
-            # Cross-attention from s to p
-            # Query: s_features, Key/Value: p_features
-            attn_output_s, _ = self.cross_attention_layers[i](s_features, p_features, p_features)
-            s_features = self.layer_norms_s[i](s_features + attn_output_s)
-            s_features = s_features + self.feed_forward_s[i](s_features)
+    return x, num_patches_d, num_patches_h, num_patches_w
 
-        # After LoCI fusion, obtain context-aware consistency features
-        C_Pi = p_features
-        C_Si = s_features
 
-        # Compute Mean Squared Error (MSE) between C_Pi and C_Si for the loss function
-        # (This should be done outside this module, in your training loop or loss function)
-
-        # Optionally, you can average the features to get fused features
-        # fused_features = (C_Pi + C_Si) / 2
-
-        # Reshape back to [batch_size, channels, D, H, W]
-        # fused_features = fused_features.permute(1, 2, 0).view(batch_size, channels, D, H, W)
-
-        return C_Pi, C_Si  
-    
 class LoCIFusionModule(nn.Module):
-    def __init__(self, pixel_dim, num_heads=8):
+    def __init__(self, pixel_dim, num_heads=8, patch_size=4):
         super(LoCIFusionModule, self).__init__()
         self.num_layers = 3  # Number of cross-attention layers
+        self.patch_size = patch_size
+        self.embed_dim = pixel_dim * (patch_size ** 3)
+        self.num_heads = num_heads
+
+        # Projection layer (optional, you can adjust the embedding dimension if needed)
+        self.projection = nn.Linear(self.embed_dim, self.embed_dim)
+
         self.cross_attention_layers = nn.ModuleList()
         self.layer_norms_p = nn.ModuleList()
         self.layer_norms_s = nn.ModuleList()
@@ -319,29 +279,33 @@ class LoCIFusionModule(nn.Module):
         for _ in range(self.num_layers):
             # Cross-attention layers for p_features and s_features
             self.cross_attention_layers.append(
-                nn.MultiheadAttention(embed_dim=pixel_dim, num_heads=num_heads)
+                nn.MultiheadAttention(embed_dim=self.embed_dim, num_heads=self.num_heads)
             )
             # Layer Normalization
-            self.layer_norms_p.append(nn.LayerNorm(pixel_dim))
-            self.layer_norms_s.append(nn.LayerNorm(pixel_dim))
+            self.layer_norms_p.append(nn.LayerNorm(self.embed_dim))
+            self.layer_norms_s.append(nn.LayerNorm(self.embed_dim))
             # Feed-forward networks
             self.feed_forward_p.append(
                 nn.Sequential(
-                    nn.Linear(pixel_dim, pixel_dim),
+                    nn.Linear(self.embed_dim, self.embed_dim),
                     nn.ReLU(),
-                    nn.Linear(pixel_dim, pixel_dim),
+                    nn.Linear(self.embed_dim, self.embed_dim),
                 )
             )
             self.feed_forward_s.append(
                 nn.Sequential(
-                    nn.Linear(pixel_dim, pixel_dim),
+                    nn.Linear(self.embed_dim, self.embed_dim),
                     nn.ReLU(),
-                    nn.Linear(pixel_dim, pixel_dim),
+                    nn.Linear(self.embed_dim, self.embed_dim),
                 )
             )
 
     def forward(self, p_features, s_features):
-        # p_features and s_features: [seq_len, batch_size, pixel_dim]
+        # p_features and s_features: [seq_len, batch_size, embed_dim]
+        # Optionally project the patches to a different embedding dimension
+        # p_features = self.projection(p_features)
+        # s_features = self.projection(s_features)
+
         for i in range(self.num_layers):
             # Cross-attention from p to s
             attn_output_p, _ = self.cross_attention_layers[i](p_features, s_features, s_features)
@@ -354,8 +318,8 @@ class LoCIFusionModule(nn.Module):
             s_features = s_features + self.feed_forward_s[i](s_features)
 
         # After LoCI fusion, obtain context-aware consistency features
-        C_Pi = p_features  # [seq_len, batch_size, pixel_dim]
-        C_Si = s_features  # [seq_len, batch_size, pixel_dim]
+        C_Pi = p_features  # [seq_len, batch_size, embed_dim]
+        C_Si = s_features  # [seq_len, batch_size, embed_dim]
 
         return C_Pi, C_Si
 
@@ -457,11 +421,30 @@ class CrossAttentionWithAge(nn.Module):
         attended_features = torch.matmul(weights, v)
         return attended_features + pixel_features  # Residual connection
 
+def reconstruct_from_patches(c_fused, num_patches_d, num_patches_h, num_patches_w, patch_size, batch_size):
+    # c_fused: [seq_len, batch_size, embed_dim]
+    seq_len = c_fused.shape[0]
+    embedding_dim = c_fused.shape[2]
+
+    # Reshape to [num_patches_d, num_patches_h, num_patches_w, batch_size, embed_dim]
+    c_fused = c_fused.view(num_patches_d, num_patches_h, num_patches_w, batch_size, embedding_dim)
+    # Permute to [batch_size, embedding_dim, num_patches_d, num_patches_h, num_patches_w]
+    c_fused = c_fused.permute(3, 4, 0, 1, 2)
+    # Reshape to [batch_size, embedding_dim, depth, height, width]
+    c_fused = c_fused.contiguous().view(
+        batch_size,
+        embedding_dim,
+        num_patches_d * patch_size,
+        num_patches_h * patch_size,
+        num_patches_w * patch_size,
+    )
+    return c_fused
 
 # Fusion for guiding DPM
 class FusionModule(nn.Module):
-    def __init__(self, in_channels=1, filters=64, age_embedding_dim=128, num_repeats=4):
+    def __init__(self, in_channels=1, filters=64, age_embedding_dim=128, num_repeats=4, patch_size=4):
         super(FusionModule, self).__init__()
+        self.patch_size = patch_size
 
         # Embedding the age information
         self.age_embedding = AgeEmbedding(embedding_dim=age_embedding_dim)
@@ -481,7 +464,7 @@ class FusionModule(nn.Module):
             self.downsample_blocks.append(DownsampleBlock(filters=filters))
 
             # Add the LoCI Fusion Block
-            self.loci_fusion_blocks.append(LoCIFusionModule(pixel_dim=filters))
+            self.loci_fusion_blocks.append(LoCIFusionModule(pixel_dim=filters, num_heads=8, patch_size=self.patch_size))
 
             # Add Transformer Self-Attention Block
             self.self_attention_blocks.append(TransformerWithSelfAttention(pixel_dim=filters))
@@ -501,36 +484,36 @@ class FusionModule(nn.Module):
         c_pred_s_list = []
         c_fused_list = []  # List to store c_fused at each level
 
+        batch_size = p.shape[0]
+
         for i in range(len(self.residual_blocks)):
             # Apply Residual Block
             p_features = self.residual_blocks[i](p_features)
             s_features = self.residual_blocks[i](s_features)
 
-            # Store spatial dimensions before downsampling
-            batch_size, channels, depth, height, width = p_features.size()
-            spatial_dims = (depth, height, width)
+            # Apply Downsampling
+            p_features = self.downsample_blocks[i](p_features)
+            s_features = self.downsample_blocks[i](s_features)
 
-            # Flatten spatial dimensions and permute for LoCI Fusion
-            p_flat = p_features.view(batch_size, channels, -1).permute(2, 0, 1)
-            s_flat = s_features.view(batch_size, channels, -1).permute(2, 0, 1)
+            # Create patches
+            p_patches, num_patches_d, num_patches_h, num_patches_w = create_patches(p_features, self.patch_size)
+            s_patches, _, _, _ = create_patches(s_features, self.patch_size)
 
-            # Apply LoCI Fusion on preceding and subsequent features
-            C_Pi, C_Si = self.loci_fusion_blocks[i](p_flat, s_flat)
+            # Apply LoCI Fusion
+            C_Pi, C_Si = self.loci_fusion_blocks[i](p_patches, s_patches)
             c_pred_p_list.append(C_Pi)
             c_pred_s_list.append(C_Si)
 
-            # Apply Transformer Self-Attention to fused features (using C_Si)
+            # Apply Transformer Self-Attention
             c_fused = self.self_attention_blocks[i](C_Si)
 
-            # Reshape c_fused back to [batch_size, channels, depth, height, width]
-            c_fused = c_fused.permute(1, 2, 0).view(batch_size, channels, *spatial_dims)
+            # Reconstruct c_fused back to spatial dimensions
+            c_fused = reconstruct_from_patches(
+                c_fused, num_patches_d, num_patches_h, num_patches_w, self.patch_size, batch_size
+            )
 
-            # Store c_fused at this level
+            # Store c_fused for use in GAMUNet
             c_fused_list.append(c_fused)
-
-            # Apply Downsampling after storing c_fused
-            p_features = self.downsample_blocks[i](p_features)
-            s_features = self.downsample_blocks[i](s_features)
 
         return c_fused_list, c_pred_p_list, c_pred_s_list
 
