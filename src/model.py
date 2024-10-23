@@ -260,11 +260,12 @@ def create_patches(x, patch_size):
 
 
 class LoCIFusionModule(nn.Module):
-    def __init__(self, pixel_dim, num_heads=8, patch_size=4):
+    def __init__(self, pixel_dim, num_heads=8, patch_size=4, num_layers=3):
         super(LoCIFusionModule, self).__init__()
         self.patch_size = patch_size
         self.embed_dim = pixel_dim * (patch_size ** 3)
         self.num_heads = num_heads
+        self.num_layers = num_layers
 
         self.cross_attention_layers = nn.ModuleList()
         self.layer_norms_p = nn.ModuleList()
