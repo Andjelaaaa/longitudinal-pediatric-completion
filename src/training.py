@@ -34,7 +34,6 @@ def train_step(model, optimizer, inputs, accelerator=None, lambda_fusion=0.6):
     # Determine the device
     device = accelerator.device if accelerator else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Model is on device: {next(model.parameters()).device}")
-    print(f"Input tensor is on device: {p.device}")
 
     # Move inputs to the selected device and ensure they are float32
     p, t, s, age = [x.to(device).float() for x in inputs]

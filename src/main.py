@@ -2,7 +2,7 @@ import argparse
 import torch
 from torch.distributed import destroy_process_group
 from torch.utils.data import DataLoader
-from training import train_model  # Your training loop is now in training.py
+from training import train_model  
 from loader import CP  # Custom dataset loader
 from model import DPM, GAMUNet, FusionModule  # Import your model classes
 from accelerate import Accelerator
@@ -19,6 +19,7 @@ def train():
     betas = (1e-4, 5e-3)
 
     # andjela_dir = '/home/andjela/joplin-intra-inter/CP_rigid_trios/CP'
+    # train_dataset = CP(root_dir=andjela_dir, age_csv=f'{andjela_dir}/trios_sorted_by_age.csv', transfo_type='rigid')
     romane_dir = '/home/GRAMES.POLYMTL.CA/andim/joplin-intra-inter/CP_rigid_trios/CP'
     train_dataset = CP(root_dir=romane_dir, age_csv=f'{romane_dir}/trios_sorted_by_age.csv', transfo_type='rigid')
     train_loader = DataLoader(train_dataset, batch_size=1, shuffle=True, pin_memory=True, num_workers=5)
