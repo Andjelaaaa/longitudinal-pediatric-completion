@@ -315,10 +315,11 @@ class LoCIFusionModule(nn.Module):
 
         # After LoCI fusion, obtain context-aware consistency features
         # Project back to pixel_dim
-        C_Pi = self.projection(p_features)  # [seq_len, batch_size, pixel_dim]
-        C_Si = self.projection(s_features)  # [seq_len, batch_size, pixel_dim]
+        # C_Pi = self.projection(p_features)  # [seq_len, batch_size, pixel_dim]
+        # C_Si = self.projection(s_features)  # [seq_len, batch_size, pixel_dim]
 
-        return C_Pi, C_Si
+        # return C_Pi, C_Si
+        return p_features, s_features
 
 
 
