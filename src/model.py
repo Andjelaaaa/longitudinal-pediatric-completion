@@ -146,13 +146,10 @@ class CrossAttention(nn.Module):
         # Residual connection: Add the attended features to the original pixel features
         return attended_features + pixel_features
 
-
-
-
-
 class TransformerWithSelfAttention(nn.Module):
     """
     Transformer Encoder block with self-attention and feed-forward layers.
+    Expects input of shape [seq_len, batch_size, embed_dim].
     """
     def __init__(self, pixel_dim, ff_dim=2048, num_heads=8, dropout=0.1):
         super(TransformerWithSelfAttention, self).__init__()
@@ -176,15 +173,12 @@ class TransformerWithSelfAttention(nn.Module):
         self.dropout2 = nn.Dropout(dropout)
 
     def forward(self, x):
-        # Reshape the 5D tensor [batch_size, channels, depth, height, width] to 3D tensor [batch_size, num_pixels, channels]
-        print('SIZE OF X:', x.size())
-        batch_size, channels, depth, height, width = x.size()
-        print('DIMENSIONS:', batch_size, channels, depth, height, width)
-        x_reshaped = x.view(batch_size, channels, -1).permute(2, 0, 1)  # [num_pixels, batch_size, channels]
-
+        """
+        x: Tensor of shape [seq_len, batch_size, embed_dim]
+        """
         # Self-Attention with residual connection and layer normalization
-        attn_output, _ = self.self_attention(x_reshaped, x_reshaped, x_reshaped)
-        x = x_reshaped + self.dropout1(attn_output)  # Residual connection
+        attn_output, _ = self.self_attention(x, x, x)
+        x = x + self.dropout1(attn_output)  # Residual connection
         x = self.norm1(x)
 
         # Feed-Forward Network with residual connection and layer normalization
@@ -192,9 +186,7 @@ class TransformerWithSelfAttention(nn.Module):
         x = x + self.dropout2(ffn_output)  # Residual connection
         x = self.norm2(x)
 
-        # Reshape back to 5D tensor [batch_size, channels, depth, height, width]
-        x = x.permute(1, 2, 0).view(batch_size, channels, depth, height, width)
-        return x
+        return x  # Output shape: [seq_len, batch_size, embed_dim]
 
 
 # Self-Attention Module (SA)
@@ -224,7 +216,7 @@ class SelfAttention(nn.Module):
         return torch.matmul(weights, v) + pixel_features  # Residual connection
 
 # LoCI Fusion Module
-class LoCIFusionModule(nn.Module):
+class LoCIFusionModuleFIRST(nn.Module):
     def __init__(self, pixel_dim, num_heads=8):
         super(LoCIFusionModule, self).__init__()
         self.num_layers = 3  # Number of cross-attention layers
@@ -294,6 +286,60 @@ class LoCIFusionModule(nn.Module):
         # fused_features = fused_features.permute(1, 2, 0).view(batch_size, channels, D, H, W)
 
         return C_Pi, C_Si  
+    
+class LoCIFusionModule(nn.Module):
+    def __init__(self, pixel_dim, num_heads=8):
+        super(LoCIFusionModule, self).__init__()
+        self.num_layers = 3  # Number of cross-attention layers
+        self.cross_attention_layers = nn.ModuleList()
+        self.layer_norms_p = nn.ModuleList()
+        self.layer_norms_s = nn.ModuleList()
+        self.feed_forward_p = nn.ModuleList()
+        self.feed_forward_s = nn.ModuleList()
+
+        for _ in range(self.num_layers):
+            # Cross-attention layers for p_features and s_features
+            self.cross_attention_layers.append(
+                nn.MultiheadAttention(embed_dim=pixel_dim, num_heads=num_heads)
+            )
+            # Layer Normalization
+            self.layer_norms_p.append(nn.LayerNorm(pixel_dim))
+            self.layer_norms_s.append(nn.LayerNorm(pixel_dim))
+            # Feed-forward networks
+            self.feed_forward_p.append(
+                nn.Sequential(
+                    nn.Linear(pixel_dim, pixel_dim),
+                    nn.ReLU(),
+                    nn.Linear(pixel_dim, pixel_dim),
+                )
+            )
+            self.feed_forward_s.append(
+                nn.Sequential(
+                    nn.Linear(pixel_dim, pixel_dim),
+                    nn.ReLU(),
+                    nn.Linear(pixel_dim, pixel_dim),
+                )
+            )
+
+    def forward(self, p_features, s_features):
+        # p_features and s_features: [seq_len, batch_size, pixel_dim]
+        for i in range(self.num_layers):
+            # Cross-attention from p to s
+            attn_output_p, _ = self.cross_attention_layers[i](p_features, s_features, s_features)
+            p_features = self.layer_norms_p[i](p_features + attn_output_p)
+            p_features = p_features + self.feed_forward_p[i](p_features)
+
+            # Cross-attention from s to p
+            attn_output_s, _ = self.cross_attention_layers[i](s_features, p_features, p_features)
+            s_features = self.layer_norms_s[i](s_features + attn_output_s)
+            s_features = s_features + self.feed_forward_s[i](s_features)
+
+        # After LoCI fusion, obtain context-aware consistency features
+        C_Pi = p_features  # [seq_len, batch_size, pixel_dim]
+        C_Si = s_features  # [seq_len, batch_size, pixel_dim]
+
+        return C_Pi, C_Si
+
 
 
 class LoCIFusionModuleV2(nn.Module):
@@ -435,6 +481,9 @@ class FusionModule(nn.Module):
         c_pred_p_list = []
         c_pred_s_list = []
 
+        # Store spatial dimensions for reshaping
+        spatial_dims = None
+
         # Sequentially apply Residual, Downsampling, LoCI Fusion, and Transformer Self-Attention blocks
         for i in range(len(self.residual_blocks)):
             # Apply Residual Block
@@ -445,15 +494,30 @@ class FusionModule(nn.Module):
             p_features = self.downsample_blocks[i](p_features)
             s_features = self.downsample_blocks[i](s_features)
 
+            # Store spatial dimensions after downsampling
+            batch_size, channels, depth, height, width = p_features.size()
+            spatial_dims = (depth, height, width)
+
+            # Flatten spatial dimensions and permute for LoCI Fusion
+            p_flat = p_features.view(batch_size, channels, -1).permute(2, 0, 1)  # [seq_len, batch_size, channels]
+            s_flat = s_features.view(batch_size, channels, -1).permute(2, 0, 1)  # [seq_len, batch_size, channels]
+
             # Apply LoCI Fusion on preceding and subsequent features
-            C_Pi, C_Si = self.loci_fusion_blocks[i](p_features, s_features)
+            C_Pi, C_Si = self.loci_fusion_blocks[i](p_flat, s_flat)
             c_pred_p_list.append(C_Pi)
             c_pred_s_list.append(C_Si)
 
-            # Apply Transformer Self-Attention to fused features (using C_Si or fused features)
+            # Apply Transformer Self-Attention to fused features (using C_Si)
             c_fused = self.self_attention_blocks[i](C_Si)
 
+            # Reshape c_fused back to [batch_size, channels, depth, height, width]
+            c_fused = c_fused.permute(1, 2, 0).view(batch_size, channels, *spatial_dims)
+
+            # Update p_features and s_features for next iteration if needed
+            # In your case, you may proceed directly depending on your architecture
+
         return c_fused, c_pred_p_list, c_pred_s_list
+
 
 
 class GAMUNet(nn.Module):
