@@ -499,27 +499,20 @@ class FusionModule(nn.Module):
 
         c_pred_p_list = []
         c_pred_s_list = []
+        c_fused_list = []  # List to store c_fused at each level
 
-        # Store spatial dimensions for reshaping
-        spatial_dims = None
-
-        # Sequentially apply Residual, Downsampling, LoCI Fusion, and Transformer Self-Attention blocks
         for i in range(len(self.residual_blocks)):
             # Apply Residual Block
             p_features = self.residual_blocks[i](p_features)
             s_features = self.residual_blocks[i](s_features)
 
-            # Apply Downsampling
-            p_features = self.downsample_blocks[i](p_features)
-            s_features = self.downsample_blocks[i](s_features)
-
-            # Store spatial dimensions after downsampling
+            # Store spatial dimensions before downsampling
             batch_size, channels, depth, height, width = p_features.size()
             spatial_dims = (depth, height, width)
 
             # Flatten spatial dimensions and permute for LoCI Fusion
-            p_flat = p_features.view(batch_size, channels, -1).permute(2, 0, 1)  # [seq_len, batch_size, channels]
-            s_flat = s_features.view(batch_size, channels, -1).permute(2, 0, 1)  # [seq_len, batch_size, channels]
+            p_flat = p_features.view(batch_size, channels, -1).permute(2, 0, 1)
+            s_flat = s_features.view(batch_size, channels, -1).permute(2, 0, 1)
 
             # Apply LoCI Fusion on preceding and subsequent features
             C_Pi, C_Si = self.loci_fusion_blocks[i](p_flat, s_flat)
@@ -532,12 +525,14 @@ class FusionModule(nn.Module):
             # Reshape c_fused back to [batch_size, channels, depth, height, width]
             c_fused = c_fused.permute(1, 2, 0).view(batch_size, channels, *spatial_dims)
 
-            # Update p_features and s_features for next iteration if needed
-            # In your case, you may proceed directly depending on your architecture
+            # Store c_fused at this level
+            c_fused_list.append(c_fused)
 
-        return c_fused, c_pred_p_list, c_pred_s_list
+            # Apply Downsampling after storing c_fused
+            p_features = self.downsample_blocks[i](p_features)
+            s_features = self.downsample_blocks[i](s_features)
 
-
+        return c_fused_list, c_pred_p_list, c_pred_s_list
 
 class GAMUNet(nn.Module):
     def __init__(self, in_channels=1, filters=64, age_embedding_dim=128, time_embedding_dim=128, num_repeats=4):
@@ -616,22 +611,35 @@ class GAMUNet(nn.Module):
             # Apply Downsampling
             x = self.encoder_downsample_blocks[i](x)
 
-        # Reverse the encoder outputs for easy access in decoder
-        encoder_outputs = encoder_outputs[::-1]  # Reverse the list
+        # Reverse the lists to match the order of decoder levels
+        encoder_outputs = encoder_outputs[::-1]
+        c_fused_list = c_fused_list[::-1]
 
-        # Decoder path
+        x = None  # Initialize x
+
         for i in range(len(self.GAM_blocks)):
-            # Apply Global Attention Mechanism with Age Embedding
-            gam_output = self.GAM_blocks[i](c_fused, age_emb)
-
-            # Retrieve the corresponding encoder output for skip connection
+            # Retrieve the corresponding c_fused and skip_connection
+            c_fused_level = c_fused_list[i]
             skip_connection = encoder_outputs[i]
 
-            print(f"Skip connection shape: {skip_connection.shape}")
-            print(f"GAM output shape: {gam_output.shape}")
+            # Compute the target spatial dimensions for c_fused_level
+            # Since GAM halves the dimensions, we need to upsample c_fused_level to double the skip_connection dimensions
+            target_spatial_dims = [dim * 2 for dim in skip_connection.shape[2:]]
 
-            # Concatenate encoder output (skip connection) with GAM output
-            concatenated_output = torch.cat([skip_connection, gam_output], dim=1)  # Concatenate along channel dimension
+            # Upsample c_fused_level
+            c_fused_upsampled = F.interpolate(
+                c_fused_level, size=target_spatial_dims, mode='trilinear', align_corners=False
+            )
+
+            # Apply Global Attention Mechanism with Age Embedding
+            gam_output = self.GAM_blocks[i](c_fused_upsampled, age_emb)
+
+            # Ensure gam_output has spatial dimensions matching skip_connection
+            assert gam_output.shape[2:] == skip_connection.shape[2:], \
+                f"GAM output shape {gam_output.shape} does not match skip connection shape {skip_connection.shape}"
+
+            # Concatenate encoder output (skip_connection) with GAM output
+            concatenated_output = torch.cat([skip_connection, gam_output], dim=1)
 
             # Apply Residual Block for Decoder
             concatenated_output = self.decoder_residual_blocks[i](concatenated_output)
@@ -754,10 +762,10 @@ class DPM(nn.Module):
         x_t = sqrtab_t * t + sqrtmab_t * noise  # Noisy image
 
         # Get fused features and context-aware consistency features from the fusion model
-        c_fused, c_pred_p_list, c_pred_s_list = self.fusion_model(p, s, age)
+        c_fused_list, c_pred_p_list, c_pred_s_list = self.fusion_model(p, s, age)
 
         # Predict the noise using GAMUNet
-        predicted_noise = self.nn_model(x_t, c_fused, age, _ts / self.n_T)
+        predicted_noise = self.nn_model(x_t, c_fused_list, age, _ts / self.n_T)
 
         # Compute diffusion loss
         l_diff = self.loss_mse(noise, predicted_noise)
