@@ -450,6 +450,7 @@ class FusionModule(nn.Module):
     def __init__(self, in_channels=1, filters=64, age_embedding_dim=128, num_repeats=4, patch_size=4):
         super(FusionModule, self).__init__()
         self.patch_size = patch_size
+        self.filters = filters
 
         # Embedding the age information
         self.age_embedding = AgeEmbedding(embedding_dim=age_embedding_dim)
