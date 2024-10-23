@@ -25,7 +25,7 @@ import torchio as tio
 from torchio import transforms as tio_transforms
 
 class CP(Dataset):
-    def __init__(self, root_dir, age_csv, transfo_type, opt=None):
+    def __init__(self, root_dir, voxel_size, age_csv, transfo_type, opt=None):
         """
         Args:
             root_dir (string): Directory with all the trios of images (nii.gz).
@@ -50,7 +50,7 @@ class CP(Dataset):
 
         # Set voxel size for resampling (default to 2mm isotropic)
         if opt is None or 'voxel_size' not in opt:
-            self.voxel_size = (4.5, 4.5, 4.5)
+            self.voxel_size = voxel_size
             # self.voxel_size = (2, 2, 2)  # Default to 2mm isotropic voxel size
         else:
             self.voxel_size = opt['voxel_size']
