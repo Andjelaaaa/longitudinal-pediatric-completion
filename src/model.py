@@ -630,26 +630,26 @@ class GAMUNet(nn.Module):
         # Final output convolution to predict the noise
         self.final_conv = nn.Conv3d(in_channels=filters, out_channels=1, kernel_size=3, padding=1)
 
-    def forward(self, t_input, c_fused, age, t):
+    def forward(self, t_input, c_fused_list, age, t):
         # Embed the age and time information
-        age_emb = self.age_embedding(age)  # Shape: [batch_size, age_embedding_dim]
-        time_emb = self.time_embedding(t)  # Shape: [batch_size, time_embedding_dim]
+        age_emb = self.age_embedding(age)
+        time_emb = self.time_embedding(t)
 
         # Combine embeddings
-        emb = torch.cat([age_emb, time_emb], dim=-1)  # Shape: [batch_size, total_embedding_dim]
+        emb = torch.cat([age_emb, time_emb], dim=-1)
 
         # Reshape embeddings to match spatial dimensions
-        emb = emb[:, :, None, None, None]  # Shape: [batch_size, total_embedding_dim, 1, 1, 1]
-        emb = emb.expand(-1, -1, t_input.shape[2], t_input.shape[3], t_input.shape[4])  # Match spatial dimensions
+        emb = emb[:, :, None, None, None]
+        emb = emb.expand(-1, -1, t_input.shape[2], t_input.shape[3], t_input.shape[4])
 
         # Concatenate embeddings with t_input
-        x = torch.cat([t_input, emb], dim=1)  # Concatenate along channel dimension
+        x = torch.cat([t_input, emb], dim=1)
 
         # Initial convolution
         x = self.initial_conv(x)
 
         # Encoder path
-        encoder_outputs = []  # To store encoder outputs for skip connections
+        encoder_outputs = []
 
         for i in range(len(self.encoder_residual_blocks)):
             # Apply Residual Block
@@ -663,9 +663,9 @@ class GAMUNet(nn.Module):
 
         # Reverse the lists to match the order of decoder levels
         encoder_outputs = encoder_outputs[::-1]
-        c_fused_list = c_fused_list[::-1]
+        c_fused_list = c_fused_list[::-1]  # Now c_fused_list is defined
 
-        x = None  # Initialize x
+        x = None
 
         for i in range(len(self.GAM_blocks)):
             # Retrieve the corresponding c_fused and skip_connection
@@ -673,10 +673,10 @@ class GAMUNet(nn.Module):
             skip_connection = encoder_outputs[i]
 
             # Compute the target spatial dimensions for c_fused_level
-            # Since GAM halves the dimensions, we need to upsample c_fused_level to double the skip_connection dimensions
-            target_spatial_dims = [dim * 2 for dim in skip_connection.shape[2:]]
+            # Since GAM halves the dimensions, we need to upsample c_fused_level to match skip_connection dimensions
+            target_spatial_dims = skip_connection.shape[2:]
 
-            # Upsample c_fused_level
+            # Upsample c_fused_level to match the spatial dimensions of the skip_connection
             c_fused_upsampled = F.interpolate(
                 c_fused_level, size=target_spatial_dims, mode='trilinear', align_corners=False
             )
@@ -700,6 +700,7 @@ class GAMUNet(nn.Module):
         # Final convolution to predict the noise
         predicted_noise = self.final_conv(x)
         return predicted_noise
+
 
 
 class DenoisingNetworkParallel(nn.Module):
