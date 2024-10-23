@@ -121,6 +121,8 @@ class GAM(nn.Module):
         # Spatial Attention
         x_spatial_att = self.relu(self.norm1(self.conv1(x)))
         x_spatial_att = self.sigmoid(self.norm2(self.conv2(x_spatial_att)))
+        print(f"x_spatial_att shape: {x_spatial_att.shape}")
+        print(f"x shape: {x.shape}")
         out = x * x_spatial_att
 
         return out  
@@ -683,7 +685,7 @@ class GAMUNet(nn.Module):
             c_fused_upsampled = F.interpolate(
                 c_fused_level, size=target_spatial_dims, mode='trilinear', align_corners=False
             )
-
+            print(f"Upsampled c_fused | {c_fused_upsampled.size()}")
             # Apply Global Attention Mechanism with Age Embedding
             gam_output = self.GAM_blocks[i](c_fused_upsampled, age_emb)
 
