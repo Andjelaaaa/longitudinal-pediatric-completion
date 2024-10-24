@@ -718,8 +718,12 @@ class GAMUNet(nn.Module):
             # Apply Residual Block for Decoder
             concatenated_output = self.decoder_residual_blocks[i](concatenated_output)
 
+            print(f"Residual block {i} | {concatenated_output.size()}")
+
             # Apply Upsample Block for Decoder
             x = self.decoder_upsample_blocks[i](concatenated_output)
+
+            print(f"Upsample block {i} | {x.size()}")
 
         # Final convolution to predict the noise
         predicted_noise = self.final_conv(x)
