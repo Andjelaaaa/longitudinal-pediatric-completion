@@ -234,8 +234,7 @@ def plot_mean_scaling_factors(input_csv, value_column, y_title):
     df = pd.read_csv(input_csv)
 
     # Define the trios to exclude from plotting
-    exclude_trios = ['trio-001', 'trio-177', 'trio-180', 'trio-182', 'trio-183', 'trio-186', 'trio-188', 
-                    'trio-189', 'trio-191', 'trio-192', 'trio-193']
+    exclude_trios = ['trio-001']
 
     # Filter the dataframe to exclude the specified trios
     filtered_df = df[~df['trio_id'].isin(exclude_trios)]
@@ -308,6 +307,7 @@ def create_rainbow_plot(input_csv, value_column, y_title):
 
     # Get the unique participant ids
     participants = df_grouped['participant_id'].unique()
+    # print(participants, len(participants))
 
     # Define a fixed list of distinct colors for consistency
     color_list = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b',
@@ -407,7 +407,7 @@ def analyze_mean_scaling_factors(input_csv):
     print(false_shrinkage_trios)
 
     # Find which trios have False in expansion_bool and return their details
-    false_expansion_indices = [i for i, val in enumerate(shrinkage_bool) if not val]
+    false_expansion_indices = [i for i, val in enumerate(expansion_bool) if not val]
     false_expansion_trios = df.groupby('trio_id').nth(2).iloc[false_expansion_indices]
     
     print('Trios with False in expansion_bool:')
@@ -415,19 +415,19 @@ def analyze_mean_scaling_factors(input_csv):
 
 if __name__ == "__main__":
     # input_csv = '/home/andjela/Documents/CP/trios_sorted_by_age.csv'
-    input_csv = './data/CP/trios_sorted_by_age.csv'
-    transfo_type = 'rigid_affine'
-    abbey_path = '/home/GRAMES.POLYMTL.CA/andim/joplin-intra-inter/CP_rigid_trios/CP'
-    save_transform_paths_CP(input_csv, abbey_path, transfo_type)
+    # input_csv = './data/CP/trios_sorted_by_age.csv'
+    # transfo_type = 'rigid_affine'
+    # abbey_path = '/home/GRAMES.POLYMTL.CA/andim/joplin-intra-inter/CP_rigid_trios/CP'
+    # save_transform_paths_CP(input_csv, abbey_path, transfo_type)
 
     # input_csv = '/home/andjela/Documents/CP/trios_sorted_by_age_with_transforms.csv'
     # rel_path = '/home/andjela/joplin-intra-inter/CP_rigid_trios'
-    process_csv_and_calculate_scaling_factors('./data/CP/trios_sorted_by_age_with_transforms.csv')
-    # input_csv = 'C:\\Users\\andje\\Downloads\\trios_sorted_by_age_with_transforms.csv'
+    # process_csv_and_calculate_scaling_factors('./data/CP/trios_sorted_by_age_with_transforms.csv')
+    input_csv = 'C:\\Users\\andje\\Downloads\\trios_sorted_by_age_with_transforms.csv'
     # create_rainbow_plot(input_csv, 'scaling_avg', 'Scaling Avg')
-    # analyze_mean_scaling_factors(input_csv)
+    analyze_mean_scaling_factors(input_csv)
     # plot_mean_scaling_factors(input_csv, 'scaling_avg', 'Scaling Avg')
-    # plot_mean_scaling_factors(input_csv, 'scaling_z', 'Scaling Z')
+    # plot_mean_scaling_factors(input_csv, 'scaling_y', 'Scaling Y')
 
     # process_csv_and_calculate_averages(input_csv)
     # create_rainbow_plot(input_csv, 'avg_intensity', 'Average Intensity')
