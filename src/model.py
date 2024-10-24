@@ -606,7 +606,7 @@ class FusionModule(nn.Module):
         return c_fused_list, c_pred_p_list, c_pred_s_list
 
 class GAMUNet(nn.Module):
-    def __init__(self, in_channels=1, filters=64, age_embedding_dim=128, time_embedding_dim=128, num_repeats=4):
+    def __init__(self, in_channels=1, filters=64, filters_fusion=32, age_embedding_dim=128, time_embedding_dim=128, num_repeats=4):
         super(GAMUNet, self).__init__()
         print('Filters:', filters)
 
@@ -624,7 +624,7 @@ class GAMUNet(nn.Module):
         self.encoder_residual_blocks = nn.ModuleList()
         self.encoder_downsample_blocks = nn.ModuleList()
 
-        c_fused_channels = filters  # Initial number of channels for c_fused
+        c_fused_channels = filters_fusion  # Initial number of channels for c_fused
 
         # Decoder blocks: GAM, Residual Blocks, Upsampling
         self.GAM_blocks = nn.ModuleList()
@@ -636,7 +636,7 @@ class GAMUNet(nn.Module):
             # Encoder Residual Block
             concatenated_channels = current_channels + current_channels  # Assuming skip_connection and gam_output have 'filters' channels each
 
-            self.decoder_residual_blocks.append(ResidualBlock(in_channels=concatenated_channels, out_channels=filters))
+            self.encoder_residual_blocks.append(ResidualBlock(in_channels=concatenated_channels, out_channels=filters))
 
             # Encoder Downsampling Block
             self.encoder_downsample_blocks.append(DownsampleBlock(filters=filters))
@@ -671,6 +671,7 @@ class GAMUNet(nn.Module):
 
         # Concatenate embeddings with t_input
         x = torch.cat([t_input, emb], dim=1)
+        print(f"Input shape | {x.size()}")
 
         # Initial convolution
         x = self.initial_conv(x)
@@ -841,6 +842,7 @@ class DPM(nn.Module):
         sqrtab_t = self.sqrtab[_ts].view(-1, 1, 1, 1, 1)
         sqrtmab_t = self.sqrtmab[_ts].view(-1, 1, 1, 1, 1)
         x_t = sqrtab_t * t + sqrtmab_t * noise  # Noisy image
+        print(f"Noisy image | {x_t.size()}")
 
         # Get fused features and context-aware consistency features from the fusion model
         c_fused_list, c_pred_p_list, c_pred_s_list = self.fusion_model(p, s, age)
