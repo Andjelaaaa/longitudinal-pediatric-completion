@@ -40,24 +40,36 @@ class AgeEmbedding(nn.Module):
 
 # Define the RB, DS, and US blocks separately
 class ResidualBlock(nn.Module):
-    def __init__(self, in_channels, filters):
+    def __init__(self, in_channels, out_channels):
         super(ResidualBlock, self).__init__()
-        self.conv1 = nn.Conv3d(in_channels, filters, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm3d(filters)
+        self.conv1 = nn.Conv3d(in_channels, out_channels, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm3d(out_channels)
         self.relu = nn.ReLU(inplace=True)
-        self.conv2 = nn.Conv3d(filters, filters, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm3d(filters)
+        self.conv2 = nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm3d(out_channels)
+        
+        # Adjust residual connection if in_channels != out_channels
+        if in_channels != out_channels:
+            self.residual_conv = nn.Conv3d(in_channels, out_channels, kernel_size=1)
+        else:
+            self.residual_conv = None
 
     def forward(self, x):
         residual = x
         out = self.conv1(x)
         out = self.bn1(out)
         out = self.relu(out)
+        
         out = self.conv2(out)
         out = self.bn2(out)
+        
+        if self.residual_conv is not None:
+            residual = self.residual_conv(residual)
+        
         out += residual  # Residual connection
         out = self.relu(out)
         return out
+
 
 class DownsampleBlock(nn.Module):
     def __init__(self, filters):
@@ -621,7 +633,9 @@ class GAMUNet(nn.Module):
         current_channels = filters
         for _ in range(num_repeats):
             # Encoder Residual Block
-            self.encoder_residual_blocks.append(ResidualBlock(in_channels=current_channels, filters=filters))
+            concatenated_channels = current_channels + current_channels  # Assuming skip_connection and gam_output have 'filters' channels each
+
+            self.decoder_residual_blocks.append(ResidualBlock(in_channels=concatenated_channels, out_channels=filters))
 
             # Encoder Downsampling Block
             self.encoder_downsample_blocks.append(DownsampleBlock(filters=filters))
@@ -699,7 +713,6 @@ class GAMUNet(nn.Module):
 
             # Concatenate encoder output (skip_connection) with GAM output
             concatenated_output = torch.cat([skip_connection, gam_output], dim=1)
-
             print(f"Concatenated output | {concatenated_output.size()}")
 
             # Apply Residual Block for Decoder
