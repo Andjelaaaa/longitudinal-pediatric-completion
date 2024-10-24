@@ -608,6 +608,7 @@ class FusionModule(nn.Module):
 class GAMUNet(nn.Module):
     def __init__(self, in_channels=1, filters=64, age_embedding_dim=128, time_embedding_dim=128, num_repeats=4):
         super(GAMUNet, self).__init__()
+        print('Filters:', filters)
 
         # Embedding the age and time information
         self.age_embedding = AgeEmbedding(embedding_dim=age_embedding_dim)
@@ -623,7 +624,7 @@ class GAMUNet(nn.Module):
         self.encoder_residual_blocks = nn.ModuleList()
         self.encoder_downsample_blocks = nn.ModuleList()
 
-        c_fused_channels = 32  # Initial number of channels for c_fused
+        c_fused_channels = filters  # Initial number of channels for c_fused
 
         # Decoder blocks: GAM, Residual Blocks, Upsampling
         self.GAM_blocks = nn.ModuleList()
