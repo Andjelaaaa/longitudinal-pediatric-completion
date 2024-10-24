@@ -690,7 +690,8 @@ class GAMUNet(nn.Module):
         # Reverse the lists to match the order of decoder levels
         encoder_outputs = encoder_outputs[::-1]
         c_fused_list = c_fused_list[::-1]  # Now c_fused_list is defined
-
+        print(f"Encoder outputs | {len(encoder_outputs)}")
+        print(f"c_fused_list | {len(c_fused_list)}")
         x = None
 
         for i in range(len(self.GAM_blocks)):
