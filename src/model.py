@@ -524,7 +524,7 @@ class FusionModule(nn.Module):
         current_channels = in_channels
         for _ in range(num_repeats):
             # Add the Residual Block
-            self.residual_blocks.append(ResidualBlock(in_channels=current_channels, filters=filters))
+            self.residual_blocks.append(ResidualBlock(in_channels=current_channels, out_channels=filters))
 
             # Add the Downsample Block
             self.downsample_blocks.append(DownsampleBlock(filters=filters))
