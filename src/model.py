@@ -648,7 +648,7 @@ class GAMUNet(nn.Module):
 
 
             # Residual Block for Decoder with input from concatenation
-            self.decoder_residual_blocks.append(ResidualBlock(in_channels=filters * 2, filters=filters))
+            self.decoder_residual_blocks.append(ResidualBlock(in_channels=filters * 2, out_channels=filters))
 
             # Upsample Block for Decoder
             self.decoder_upsample_blocks.append(UpsampleBlock(filters=filters))
