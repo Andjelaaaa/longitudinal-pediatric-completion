@@ -700,6 +700,8 @@ class GAMUNet(nn.Module):
             # Concatenate encoder output (skip_connection) with GAM output
             concatenated_output = torch.cat([skip_connection, gam_output], dim=1)
 
+            print(f"Concatenated output | {concatenated_output.size()}")
+
             # Apply Residual Block for Decoder
             concatenated_output = self.decoder_residual_blocks[i](concatenated_output)
 
