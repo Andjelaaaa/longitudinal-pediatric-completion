@@ -9,6 +9,7 @@ import nibabel as nib
 import seaborn as sns
 from statsmodels.graphics.functional import rainbowplot
 from scipy.interpolate import make_interp_spline
+from numpy.polynomial.polynomial import Polynomial
 import matplotlib
 # matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
@@ -53,6 +54,48 @@ def extract_scaling_and_shearing(affine_matrix):
     shear_factors = [shear_xy, shear_xz, shear_yz]
 
     return scaling_factors, shear_factors
+
+def calculate_brain_volume(img_path):
+
+    # Load the NIfTI image
+    img = nib.load(img_path)
+    data = img.get_fdata()
+
+    # Count the number of non-zero voxels
+    brain_voxels = np.count_nonzero(data)
+
+    # Get voxel dimensions from the affine
+    voxel_dims = img.header.get_zooms()
+    voxel_volume = np.prod(voxel_dims)  # Voxel volume in mm³
+
+    # Calculate total brain volume in mm³
+    total_brain_volume = brain_voxels * voxel_volume
+
+    # Convert to cm³ (optional)
+    total_brain_volume_cm3 = total_brain_volume / 1000
+
+    # print(f"Total Brain Volume: {total_brain_volume} mm³ ({total_brain_volume_cm3} cm³)")
+    return total_brain_volume_cm3
+
+
+def process_csv_and_calculate_volume_after_skull_stripping(csv_file_path):
+    """
+    Processes the CSV file, calculates the mean volume for each skull-stripped image,
+    and stores the result in new columns for global volume.
+    
+    Parameters:
+        csv_file_path (str): Path to the input CSV file.
+    """
+    # Load the CSV file
+    df = pd.read_csv(csv_file_path)
+
+    # Iterate through each row and calculate/store the scaling factors
+    for idx, row in df.iterrows():
+        print(f'Doing trio-{idx}...')
+        n4_skull_strip_path = row['path']
+        df.at[idx, 'global_volume'] = calculate_brain_volume(n4_skull_strip_path)
+
+    df.to_csv(csv_file_path, index=False)
 
 def process_csv_and_calculate_scaling_factors(csv_file_path):
     """
@@ -229,17 +272,78 @@ def process_csv_and_calculate_averages(csv_file_path):
     # Save the updated DataFrame with the new column
     df.to_csv(csv_file_path, index=False)
 
-def plot_mean_scaling_factors(input_csv, value_column, y_title):
+def plot_extrapolated_mean(input_csv, value_column, y_title):
+
     # Load the CSV file
     df = pd.read_csv(input_csv)
 
-    # Define the trios to exclude from plotting
-    exclude_trios = ['trio-001']
+    # Plot the trios, color based on 'sex' column (1 = Male, 0 = Female)
+    plt.figure(figsize=(10, 6))
 
-    # Filter the dataframe to exclude the specified trios
-    filtered_df = df[~df['trio_id'].isin(exclude_trios)]
+    male_plotted, female_plotted = False, False  # To track if male/female has been added to the legend
+    for trio_id, group in df.groupby('trio_id'):
+        sex_color = '#ADD8E6' if group['sex'].iloc[0] == 1 else '#F08080'
+        label = None
+        if group['sex'].iloc[0] == 1 and not male_plotted:
+            label = 'Male'
+            male_plotted = True
+        elif group['sex'].iloc[0] == 0 and not female_plotted:
+            label = 'Female'
+            female_plotted = True
+        plt.plot(group['age'], group[f'{value_column}'], marker='o', color=sex_color, label=label)
 
-    # Plot the remaining trios, color based on 'sex' column (1 = Male, 0 = Female)
+    # Group by 'age' to calculate the mean and std
+    grouped = df.groupby('age')[value_column].agg(['mean', 'std']).reset_index()
+
+    # Handle missing or NaN values
+    grouped = grouped.dropna()
+
+    # Normalize the x-values for numerical stability
+    x = grouped['age']
+    x_norm = (x - x.mean()) / x.std()
+    y_mean = grouped['mean']
+    y_std = grouped['std']
+
+    # Fit a lower-degree polynomial regression (degree=2)
+    try:
+        mean_poly = Polynomial.fit(x_norm, y_mean, deg=2)
+        std_poly = Polynomial.fit(x_norm, y_std, deg=2)
+    except Exception as e:
+        print(f"Polynomial fitting failed: {e}")
+        return
+
+    # Define extended x range for extrapolation
+    x_extended = np.linspace(x_norm.min() - 0.5, x_norm.max() + 0.5, 500)
+
+    # Predict mean and std for the extended range
+    mean_extended = mean_poly(x_extended)
+    std_extended = std_poly(x_extended)
+
+    # De-normalize x for plotting
+    x_extended_original = x_extended * x.std() + x.mean()
+
+    # Plot the mean and extrapolated standard deviation curves
+    plt.plot(x_extended_original, mean_extended, label='Mean', color='black', linewidth=2)
+    plt.fill_between(x_extended_original, mean_extended - std_extended, mean_extended + std_extended,
+                     color='blue', alpha=0.3, label='Mean ± Std Dev')
+
+    # Adding labels and title
+    plt.xlabel('Age')
+    plt.ylabel(f'{y_title}')
+    plt.title(f'{y_title} vs Age with Extrapolated Mean ± Std Dev')
+
+    # Display the legend
+    plt.legend()
+    plt.show()
+
+
+
+def plot_mean_value_column(input_csv, value_column, y_title):
+
+    # Load the CSV file
+    filtered_df = pd.read_csv(input_csv)
+
+    # Plot the trios, color based on 'sex' column (1 = Male, 0 = Female)
     plt.figure(figsize=(10, 6))
 
     male_plotted, female_plotted = False, False  # To track if male/female has been added to the legend
@@ -255,36 +359,112 @@ def plot_mean_scaling_factors(input_csv, value_column, y_title):
         plt.plot(group['age'], group[f'{value_column}'], marker='o', color=sex_color, label=label)
 
     # Group the data by 'trio_id' and calculate the mean and standard deviation for each trio element (1st, 2nd, 3rd)
-    first_mean = filtered_df.groupby('trio_id').nth(0)[f'{value_column}'].mean()
-    first_std = filtered_df.groupby('trio_id').nth(0)[f'{value_column}'].std()
+    first_mean = filtered_df.groupby('trio_id').nth(0)[value_column].mean()
+    first_std = filtered_df.groupby('trio_id').nth(0)[value_column].std()
     
-    second_mean = filtered_df.groupby('trio_id').nth(1)[f'{value_column}'].mean()
-    second_std = filtered_df.groupby('trio_id').nth(1)[f'{value_column}'].std()
+    second_mean = filtered_df.groupby('trio_id').nth(1)[value_column].mean()
+    second_std = filtered_df.groupby('trio_id').nth(1)[value_column].std()
     
-    third_mean = filtered_df.groupby('trio_id').nth(2)[f'{value_column}'].mean()
-    third_std = filtered_df.groupby('trio_id').nth(2)[f'{value_column}'].std()
+    third_mean = filtered_df.groupby('trio_id').nth(2)[value_column].mean()
+    third_std = filtered_df.groupby('trio_id').nth(2)[value_column].std()
 
     # Calculate the mean ages for the first, second, and third elements in each trio
     mean_age_first = filtered_df.groupby('trio_id').nth(0)['age'].mean()
     mean_age_second = filtered_df.groupby('trio_id').nth(1)['age'].mean()
     mean_age_third = filtered_df.groupby('trio_id').nth(2)['age'].mean()
 
-    # Plot the average scaling values centered on the mean ages
-    x_values = [mean_age_first, mean_age_second, mean_age_third]
-    y_values = [first_mean, second_mean, third_mean]
-    error_values = [first_std, second_std, third_std]
+    # Prepare x (age) and y (mean) values
+    x_values = np.array([mean_age_first, mean_age_second, mean_age_third])
+    y_values = np.array([first_mean, second_mean, third_mean])
+    lower_bounds = y_values - np.array([first_std, second_std, third_std])
+    upper_bounds = y_values + np.array([first_std, second_std, third_std])
 
-    # Plot the means with error bars for standard deviations
-    plt.errorbar(x_values, y_values, yerr=error_values, fmt='o-', color='black', capsize=5, label='Mean ± Std Dev')
+    # Remove duplicates and ensure sufficient points for interpolation
+    unique_indices = np.unique(x_values, return_index=True)[1]
+    x_values_unique = x_values[unique_indices]
+    lower_bounds_unique = lower_bounds[unique_indices]
+    upper_bounds_unique = upper_bounds[unique_indices]
+    y_values_unique = y_values[unique_indices]
+
+    # Perform interpolation for smooth curves
+    x_smooth = np.linspace(x_values_unique.min(), x_values_unique.max(), 500)  # Smooth x values
+
+    # Use linear interpolation for fallback to avoid boundary condition issues
+    lower_smooth = np.interp(x_smooth, x_values_unique, lower_bounds_unique)
+    upper_smooth = np.interp(x_smooth, x_values_unique, upper_bounds_unique)
+    mean_smooth = np.interp(x_smooth, x_values_unique, y_values_unique)
+
+    # Plot the results
+    plt.plot(x_smooth, mean_smooth, label='Mean', color='black', linewidth=2)
+    plt.fill_between(x_smooth, lower_smooth, upper_smooth, color='blue', alpha=0.3, label='Mean ± Std Dev')
 
     # Adding labels and title
     plt.xlabel('Age')
     plt.ylabel(f'{y_title}')
-    plt.title(f'{y_title} vs Age for All Trios with Mean Curve (Centered by Age)')
+    plt.title(f'{y_title} vs Age with Smooth Mean ± Std Dev')
 
-    # Display the plot
+    # Display the legend
     plt.legend()
     plt.show()
+
+
+
+# def plot_mean_value_colum(input_csv, value_column, y_title):
+#     # Load the CSV file
+#     df = pd.read_csv(input_csv)
+
+#     # Define the trios to exclude from plotting
+#     exclude_trios = ['trio-001']
+
+#     # Filter the dataframe to exclude the specified trios
+#     filtered_df = df[~df['trio_id'].isin(exclude_trios)]
+
+#     # Plot the remaining trios, color based on 'sex' column (1 = Male, 0 = Female)
+#     plt.figure(figsize=(10, 6))
+
+#     male_plotted, female_plotted = False, False  # To track if male/female has been added to the legend
+#     for trio_id, group in filtered_df.groupby('trio_id'):
+#         sex_color = '#ADD8E6' if group['sex'].iloc[0] == 1 else '#F08080'
+#         label = None
+#         if group['sex'].iloc[0] == 1 and not male_plotted:
+#             label = 'Male'
+#             male_plotted = True
+#         elif group['sex'].iloc[0] == 0 and not female_plotted:
+#             label = 'Female'
+#             female_plotted = True
+#         plt.plot(group['age'], group[f'{value_column}'], marker='o', color=sex_color, label=label)
+
+#     # Group the data by 'trio_id' and calculate the mean and standard deviation for each trio element (1st, 2nd, 3rd)
+#     first_mean = filtered_df.groupby('trio_id').nth(0)[f'{value_column}'].mean()
+#     first_std = filtered_df.groupby('trio_id').nth(0)[f'{value_column}'].std()
+    
+#     second_mean = filtered_df.groupby('trio_id').nth(1)[f'{value_column}'].mean()
+#     second_std = filtered_df.groupby('trio_id').nth(1)[f'{value_column}'].std()
+    
+#     third_mean = filtered_df.groupby('trio_id').nth(2)[f'{value_column}'].mean()
+#     third_std = filtered_df.groupby('trio_id').nth(2)[f'{value_column}'].std()
+
+#     # Calculate the mean ages for the first, second, and third elements in each trio
+#     mean_age_first = filtered_df.groupby('trio_id').nth(0)['age'].mean()
+#     mean_age_second = filtered_df.groupby('trio_id').nth(1)['age'].mean()
+#     mean_age_third = filtered_df.groupby('trio_id').nth(2)['age'].mean()
+
+#     # Plot the average scaling values centered on the mean ages
+#     x_values = [mean_age_first, mean_age_second, mean_age_third]
+#     y_values = [first_mean, second_mean, third_mean]
+#     error_values = [first_std, second_std, third_std]
+
+#     # Plot the means with error bars for standard deviations
+#     plt.errorbar(x_values, y_values, yerr=error_values, fmt='o-', color='black', capsize=5, label='Mean ± Std Dev')
+
+#     # Adding labels and title
+#     plt.xlabel('Age')
+#     plt.ylabel(f'{y_title}')
+#     plt.title(f'{y_title} vs Age for All Trios with Mean Curve (Centered by Age)')
+
+#     # Display the plot
+#     plt.legend()
+#     plt.show()
 
 def create_rainbow_plot(input_csv, value_column, y_title):
     """
@@ -326,7 +506,7 @@ def create_rainbow_plot(input_csv, value_column, y_title):
     groups = np.array_split(participants, 8)
 
     # Create the plot with 2x4 subplots, each with up to 6 participants using the alternate color map
-    fig, axes = plt.subplots(2, 4, figsize=(18, 10))
+    fig, axes = plt.subplots(2, 4, figsize=(16, 10))
 
     # Flatten axes for easier iteration
     axes = axes.flatten()
@@ -364,12 +544,12 @@ def create_rainbow_plot(input_csv, value_column, y_title):
             ax.scatter(participant_data['age'], participant_data[value_column], color=color, edgecolor='black', zorder=5)
 
         # Add a legend with participant numbers (P1, P2, P3, ...)
-        ax.legend(title='Participants', loc='upper right')
+        # ax.legend(title='Participants', loc='upper right')
 
         # Customize each subplot
-        ax.set_title(f'Participants {i * 6 + 1} to {i * 6 + len(group)}', fontsize=12)
-        ax.set_xlabel('Age', fontsize=10)
-        ax.set_ylabel(y_title, fontsize=10)
+        ax.set_title(f'Participants {i * 6 + 1} to {i * 6 + len(group)}', fontsize=16)
+        ax.set_xlabel('Age', fontsize=14)
+        ax.set_ylabel(y_title, fontsize=14)
         ax.grid(True)
 
     # Adjust layout and show the plot
@@ -413,9 +593,48 @@ def analyze_mean_scaling_factors(input_csv):
     print('Trios with False in expansion_bool:')
     print(false_expansion_trios)
 
+def analyze_global_volumes(input_csv):
+    df = pd.read_csv(input_csv)
+
+    print(df['global_volume'].describe())
+    # Group by 'trio_id' and calculate the average global volume per trio
+    average_global_volume_per_trio = df.groupby('trio_id')['global_volume'].mean()
+
+    # Verify that the first global volume in each trio is smaller than the second, and the second is smaller than the third
+    # First, sort by trio_id and age within each trio to ensure chronological order
+    sorted_data = df.sort_values(by=['trio_id', 'age'])
+
+    # Group by trio_id and extract global volumes for verification
+    volume_check = sorted_data.groupby('trio_id')['global_volume'].apply(
+        lambda x: all(x.iloc[i] < x.iloc[i + 1] for i in range(len(x) - 1))
+    )
+
+    # Prepare results for display
+    results = {
+        "average_global_volume_per_trio": average_global_volume_per_trio,
+        "volume_increasing_check": volume_check
+    }
+
+    # Filter to find the trios where the volume increasing check is False
+    trios_with_false_check = volume_check[~volume_check].index
+
+    # Count and list the trios
+    number_of_false_trios = len(trios_with_false_check)
+    false_trios_list = list(trios_with_false_check)
+
+    number_of_false_trios, false_trios_list
+
+
+
 if __name__ == "__main__":
     # input_csv = '/home/andjela/Documents/CP/trios_sorted_by_age.csv'
-    # input_csv = './data/CP/trios_sorted_by_age.csv'
+    input_csv = './data/CP/trios_sorted_by_age.csv'
+    # process_csv_and_calculate_volume_after_skull_stripping(input_csv)
+    analyze_global_volumes(input_csv)
+    plot_mean_value_column(input_csv, 'global_volume', 'Intracranial Volume (cm³)')
+    # plot_extrapolated_mean(input_csv, "global_volume", "Intracranial Volume (cm³)")
+
+    # create_rainbow_plot(input_csv, 'global_volume', 'Intracranial Volume (cm³)')
     # transfo_type = 'rigid_affine'
     # abbey_path = '/home/GRAMES.POLYMTL.CA/andim/joplin-intra-inter/CP_rigid_trios/CP'
     # save_transform_paths_CP(input_csv, abbey_path, transfo_type)
@@ -423,11 +642,11 @@ if __name__ == "__main__":
     # input_csv = '/home/andjela/Documents/CP/trios_sorted_by_age_with_transforms.csv'
     # rel_path = '/home/andjela/joplin-intra-inter/CP_rigid_trios'
     # process_csv_and_calculate_scaling_factors('./data/CP/trios_sorted_by_age_with_transforms.csv')
-    input_csv = 'C:\\Users\\andje\\Downloads\\trios_sorted_by_age_with_transforms.csv'
+    # input_csv = 'C:\\Users\\andje\\Downloads\\trios_sorted_by_age_with_transforms.csv'
     # create_rainbow_plot(input_csv, 'scaling_avg', 'Scaling Avg')
-    analyze_mean_scaling_factors(input_csv)
-    # plot_mean_scaling_factors(input_csv, 'scaling_avg', 'Scaling Avg')
-    # plot_mean_scaling_factors(input_csv, 'scaling_y', 'Scaling Y')
+    # analyze_mean_scaling_factors(input_csv)
+    # plot_mean_value_column(input_csv, 'scaling_avg', 'Scaling Avg')
+    # plot_mean_value_column(input_csv, 'scaling_y', 'Scaling Y')
 
     # process_csv_and_calculate_averages(input_csv)
     # create_rainbow_plot(input_csv, 'avg_intensity', 'Average Intensity')
