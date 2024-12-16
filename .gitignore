@@ -1,8 +1,20 @@
+data/CP/.~lock.trios_sorted_by_age_with_transforms.csv#
 wandb/
 data/CP/
+data/CP/.~lock.trios_sorted_by_age.csv#
+data/CP/train_folder/
+data/CP/val_folder/
 data/BCP/
 src/analysis_results/
-
+data/CP/ind_data.csv
+data/CP/sub-001/
+data/CP/sub-002/
+data/CP/sub-003/
+data/CP/sub-004/
+data/CP/sub-005/
+data/CP/trios_sorted_by_age.csv
+data/CP/trios_sorted_by_age_with_transforms.csv
+src/test.py
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

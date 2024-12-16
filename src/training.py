@@ -1,5 +1,6 @@
 import torch
 import wandb
+from accelerate import Accelerator
 
 # Loss functions
 def diffusion_loss(eps, predicted_eps):
@@ -12,12 +13,17 @@ def total_loss(eps, predicted_eps, c_pred_p, c_pred_s, lambda_fusion=0.6):
     """
     Compute the total loss by combining the diffusion loss and fusion loss.
     """
+    # Diffusion loss (for predicting the added noise)
     l_diff = diffusion_loss(eps, predicted_eps)
+    
+    # Fusion loss (consistency between preceding and subsequent image features)
     l_fusion = fusion_loss(c_pred_p, c_pred_s)
+    
     return l_diff + lambda_fusion * l_fusion
 
-# Training step function
-def train_step(model, optimizer, inputs, noise_schedule, lambda_fusion, device):
+
+# Training step function with Accelerator support
+def train_step(model, optimizer, inputs, accelerator=None, lambda_fusion=0.6):
     """
     Perform a single training step:
     1. Forward pass
@@ -25,78 +31,83 @@ def train_step(model, optimizer, inputs, noise_schedule, lambda_fusion, device):
     3. Backward pass
     4. Update model weights
     """
-    model.train()  # Ensure the model is in training mode
-    
-    # Unpack inputs: p (preceding), t (target), s (subsequent), age (age tensor)
-    p, t, s, age = inputs
+    # Determine the device
+    device = accelerator.device if accelerator else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Model is on device: {next(model.parameters()).device}")
 
-    # Move inputs to the correct device (GPU or CPU)
-    p, t, s, age = p.to(device), t.to(device), s.to(device), age.to(device)
-    
-    # Generate a random noise level based on the noise schedule
-    noise_level = torch.rand(1).item() * (noise_schedule[-1] - noise_schedule[0]) + noise_schedule[0]
-    
-    # Add noise to the target image to simulate noisy observations
-    noisy_t = t + noise_level * torch.randn_like(t).to(device)
-    
-    # Ground truth noise (eps) to be removed from the noisy target image
-    eps = torch.randn_like(t).to(device)  # Ground truth noise
+    # Move inputs to the selected device and ensure they are float32
+    p, t, s, age = [x.to(device).float() for x in inputs]
 
-    # Zero out gradients before backward pass
+    # Zero out gradients
     optimizer.zero_grad()
 
-    # Forward pass through the model
-    predicted_eps, loci_outputs_p, loci_outputs_s = model(p, noisy_t, s, age)
+    # Forward pass with autocast for mixed precision (only if accelerator is used)
+    if accelerator:
+        with accelerator.autocast():
+            # Model forward pass (loss is computed inside the model)
+            loss = model(p, t, s, age, lambda_fusion)
+        accelerator.backward(loss)
+    else:
+        # Standard forward pass
+        loss = model(p, t, s, age, lambda_fusion)
+        loss.backward()
 
-    # Assuming predicted_eps is the model's prediction for the noise to remove from noisy_t
-    # Cfused should be the main prediction output, here it's just predicted_eps
-    c_fused = predicted_eps  # In this case, c_fused corresponds to predicted noise correction
-    predicted_eps = c_fused - noisy_t  # The predicted noise to be subtracted
-
-    # Calculate the total loss
-    loss = total_loss(eps, predicted_eps, loci_outputs_p, loci_outputs_s, lambda_fusion)
-    
-    # Backward pass (compute gradients)
-    loss.backward()
-    
-    # Update model weights
     optimizer.step()
 
     return loss
 
+def monitor_data_batch(inputs):
+    total_data_size = sum([input.element_size() * input.nelement() for input in inputs]) / 1024**2
+    print(f"Batch size: {total_data_size:.2f} MB")
+    for i, input_tensor in enumerate(inputs):
+        print(f"Input {i} | Size: {input_tensor.size()} | Memory: {input_tensor.element_size() * input_tensor.nelement() / 1024**2:.2f} MB")
+
 # Main training function
-def train_model(model, train_loader, noise_schedule, epochs=10, lambda_fusion=0.6, device="cpu"):
+def train_model(model, train_loader, epochs=10, lambda_fusion=0.6, accelerator=None):
     """
     Main training loop:
     1. Iterate through the dataset for a given number of epochs
     2. Perform a forward and backward pass for each batch
     3. Log training progress
     """
-    optimizer = torch.optim.Adam(model.parameters(), lr=2e-4)  # Optimizer for updating model weights
+    optimizer = torch.optim.Adam(model.parameters(), lr=2e-4)
 
-    # Initialize WandB for tracking metrics
-    wandb.init(project="long-ped-comp", entity="adimitri")
-    wandb.watch(model, log="all")
+    # If an accelerator is provided, use it to prepare model, optimizer, and dataloader
+    if accelerator:
+        model, optimizer, train_loader = accelerator.prepare(model, optimizer, train_loader)
+
+    # Initialize WandB for tracking metrics (only on the main process)
+    # if accelerator is None or accelerator.is_main_process:
+    #     wandb.init(project="long-ped-comp", entity="adimitri")
+    #     wandb.watch(model, log="all")
 
     for epoch in range(epochs):
-        print(f"Epoch {epoch+1}/{epochs}")
+        print(f"Epoch {epoch + 1}/{epochs}")
         epoch_loss = 0
-        for step, inputs in enumerate(train_loader):
-            # Move inputs to the device and perform a training step
-            inputs = [x.to(device) for x in inputs]
-            loss = train_step(model, optimizer, inputs, noise_schedule, lambda_fusion, device)
 
-            # Accumulate the loss for epoch logging
+        for step, inputs in enumerate(train_loader):
+            monitor_data_batch(inputs)
+            
+            # Perform a training step
+            loss = train_step(model, optimizer, inputs, accelerator=accelerator, lambda_fusion=lambda_fusion)
+
+            # Accumulate epoch loss
             epoch_loss += loss.item()
 
-            # Log step-wise loss
-            if step % 10 == 0:
+            # Log step-wise loss (only on main process)
+            if step % 10 == 0 and (accelerator is None or accelerator.is_main_process):
                 print(f"Step {step}, Loss: {loss.item()}")
-                wandb.log({"batch_loss": loss.item(), "epoch": epoch + 1})
+                # wandb.log({"batch_loss": loss.item(), "epoch": epoch + 1})
 
-        # Log the average loss for the epoch
+        # Log epoch loss
         epoch_loss /= len(train_loader)
-        wandb.log({"epoch_loss": epoch_loss, "epoch": epoch + 1})
+        # if accelerator is None or accelerator.is_main_process:
+            # wandb.log({"epoch_loss": epoch_loss, "epoch": epoch + 1})
 
-    # Optionally, save the model at the end of training
-    torch.save(model.state_dict(), "model.pth")
+    # Save the model state (only on main process)
+    if accelerator is None or accelerator.is_main_process:
+        torch.save(model.state_dict(), "model.pth")
+
+    # Wait for all processes to finish
+    if accelerator:
+        accelerator.wait_for_everyone()

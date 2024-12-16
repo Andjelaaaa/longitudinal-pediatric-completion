@@ -6,6 +6,7 @@ SCRIPT_DIR=$(dirname "$(realpath "$0")")
 # Base directory relative to the script's directory
 BASE_DIR="${SCRIPT_DIR}/../data/$1/"
 
+
 # Check if the user provided the data subfolder argument (like CP or BCP)
 if [ -z "$1" ]; then
     echo "Usage: $0 <data-name>"
