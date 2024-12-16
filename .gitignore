@@ -1,5 +1,7 @@
 wandb/
+data/CP/
 data/BCP/
+src/analysis_results/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

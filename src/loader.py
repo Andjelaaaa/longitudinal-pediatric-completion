@@ -1,13 +1,13 @@
 import os
 import numpy as np
-import h5py
+#import h5py
 import pandas as pd
 import shutil
 import glob
 import time
 import nibabel as nib
 import seaborn as sns
-import SimpleITK as sitk
+#import SimpleITK as sitk
 from statsmodels.graphics.functional import rainbowplot
 from scipy.interpolate import make_interp_spline
 import matplotlib
@@ -614,11 +614,11 @@ def preprocess_CP(df, trios_df):
         
         for trio in trios:
             # Skip trios before trio-194
-            if trio.iloc[1]["trio_id"] < 'trio-194':
+            if trio.iloc[1]["trio_id"] < 'trio-469':
                 continue
             
             # Process only trios starting from trio-194
-            if trio.iloc[1]["trio_id"] >= 'trio-194':
+            if trio.iloc[1]["trio_id"] >= 'trio-469':
                 # Extract the paths for the trio
                 path_1 = trio.iloc[0]['path']
                 path_2 = trio.iloc[1]['path']  # This is the reference
